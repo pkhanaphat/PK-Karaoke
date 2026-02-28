@@ -16,14 +16,19 @@ bool MidiPlayer::loadMidiFile (const juce::File& file)
         {
             midiFile.convertTimestampTicksToSeconds();
             
-            midiSequence.clear();
+            // Merge all tracks into a single sequential track
+            juce::MidiMessageSequence mergedSequence;
             for (int i = 0; i < midiFile.getNumTracks(); ++i)
             {
                 if (auto* track = midiFile.getTrack (i))
-                    midiSequence.addSequence (*track, 0.0);
+                    mergedSequence.addSequence (*track, 0.0);
             }
             
-            midiSequence.updateMatchedPairs();
+            mergedSequence.updateMatchedPairs();
+            
+            // Re-store the sorted, merged sequence back into our player sequence
+            midiSequence.clear();
+            midiSequence.addSequence (mergedSequence, 0.0);
             
             durationSeconds = midiSequence.getEndTime();
             DBG("MidiPlayer: Loaded file. Tracks=" << midiFile.getNumTracks() << ", Events=" << midiSequence.getNumEvents() << ", Duration=" << durationSeconds << "s");
