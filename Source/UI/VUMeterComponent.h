@@ -5,13 +5,22 @@
 class VUMeterComponent : public juce::Component, public juce::Timer {
 public:
   VUMeterComponent() {
-    startTimerHz(30); // 30 FPS for smooth metering
+    setOpaque(true);
+    startTimerHz(60); // 60 FPS for high-end smooth metering
   }
 
   ~VUMeterComponent() override { stopTimer(); }
 
   void setLevel(float newLevel) {
-    level = juce::jlimit(0.0f, 1.5f, newLevel);
+    auto limitedLevel = juce::jlimit(0.0f, 1.5f, newLevel);
+
+    // Low-pass filter for rising edge to make it smoother (+15% of new value
+    // per frame)
+    if (limitedLevel > level)
+      level += (limitedLevel - level) * 0.4f;
+    else
+      level = limitedLevel;
+
     if (level > peakLevel) {
       peakLevel = level;
       peakHoldCounter = 0;
@@ -19,16 +28,16 @@ public:
   }
 
   void timerCallback() override {
-    // Smooth decay for the level bar
-    level *= 0.85f;
+    // Smoother falling decay for 60Hz (from 0.92f to 0.96f)
+    level *= 0.96f;
     if (level < 0.001f)
       level = 0.0f;
 
-    // Peak hold decay
-    if (peakHoldCounter < 20) {
+    // Peak hold decay (from 0.96f to 0.98f)
+    if (peakHoldCounter < 40) { // Hold for ~0.6s at 60Hz
       peakHoldCounter++;
     } else {
-      peakLevel *= 0.95f;
+      peakLevel *= 0.98f;
       if (peakLevel < 0.001f)
         peakLevel = 0.0f;
     }
@@ -37,35 +46,48 @@ public:
   }
 
   void paint(juce::Graphics &g) override {
-    auto area = getLocalBounds().toFloat();
+    auto area = getLocalBounds();
 
-    // Background track
-    g.setColour(juce::Colours::black.withAlpha(0.3f));
-    g.fillRect(area);
+    // Draw solid black background to prevent ghosting
+    g.fillAll(juce::Colours::black);
 
-    // Meter segments (Sonar style)
-    auto barHeight = area.getHeight();
-    auto fillHeight = barHeight * level;
+    const int numSegments = 40;
+    const int gap = 1; // 1px gap to fit 40 segments nicely
 
-    juce::ColourGradient gradient(juce::Colours::green, 0, barHeight,
-                                  juce::Colours::red, 0, 0, false);
-    gradient.addColour(0.7, juce::Colours::yellow);
+    float totalHeight = (float)area.getHeight();
+    float segmentHeight = (totalHeight - (numSegments - 1) * gap) / numSegments;
 
-    g.setGradientFill(gradient);
-    g.fillRect(area.withTop(barHeight - fillHeight));
+    for (int i = 0; i < numSegments; ++i) {
+      // Index 0 is bottom, numSegments-1 is top
+      float yPos = totalHeight - (i + 1) * (segmentHeight + gap) + gap;
 
-    // Peak Hold Line
-    if (peakLevel > 0.01f) {
-      g.setColour(juce::Colours::white);
-      float peakY = barHeight - (barHeight * peakLevel);
-      g.drawHorizontalLine((int)peakY, area.getX(), area.getRight());
-    }
+      // Calculate normalized threshold for this segment
+      // 1.12 is approx +1dB. With 40 segments, the red zone (starts at 36)
+      // begins at +1dB.
+      float segmentThreshold = (i + 1) * (1.12f / 36.0f);
 
-    // Scale Markings
-    g.setColour(juce::Colours::white.withAlpha(0.2f));
-    for (float i = 0.25f; i < 1.0f; i += 0.25f) {
-      float y = barHeight - (barHeight * i);
-      g.drawHorizontalLine((int)y, area.getX(), area.getRight());
+      bool isActive = level >= segmentThreshold;
+      bool isPeak = peakLevel >= segmentThreshold &&
+                    peakLevel < segmentThreshold + (1.12f / 36.0f);
+
+      juce::Colour segmentColour;
+      if (i < 30) {
+        segmentColour = juce::Colours::green;
+      } else if (i < 36) {
+        segmentColour = juce::Colours::yellow;
+      } else {
+        segmentColour = juce::Colours::red;
+      }
+
+      if (isActive) {
+        g.setColour(segmentColour);
+      } else if (isPeak) {
+        g.setColour(juce::Colours::white.withAlpha(0.6f));
+      } else {
+        g.setColour(segmentColour.withAlpha(0.12f));
+      }
+
+      g.fillRect(area.getX(), (int)yPos, area.getWidth(), (int)segmentHeight);
     }
   }
 

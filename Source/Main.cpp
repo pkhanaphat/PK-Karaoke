@@ -50,7 +50,13 @@ public:
       // Kiosk Mode aggressively minimises when it loses focus (e.g. Windows key
       // pressed)
       setTitleBarHeight(0);
-      setFullScreen(true);
+
+      // Get the display where the mouse is currently located and fill its total
+      // area
+      auto &desktop = juce::Desktop::getInstance();
+      auto display =
+          desktop.getDisplays().findDisplayForPoint(desktop.getMousePosition());
+      setBounds(display.totalArea);
 
       setVisible(true);
     }

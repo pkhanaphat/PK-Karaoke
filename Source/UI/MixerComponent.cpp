@@ -159,7 +159,7 @@ void TrackStripComponent::resized() {
   auto faderArea = area;
 
   // Overlapping VU and Fader
-  vuMeter.setBounds(faderArea.removeFromRight(12));
+  vuMeter.setBounds(faderArea.removeFromRight(16));
   volumeSlider.setBounds(faderArea);
 }
 
