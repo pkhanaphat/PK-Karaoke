@@ -23,40 +23,72 @@ target_compile_features(PKKaraokeVST3 PUBLIC cxx_std_20)
 # Source files
 target_sources(PKKaraokeVST3 PRIVATE
     Source/Main.cpp
-    Source/MainComponent.h
-    Source/MainComponent.cpp
-    Source/NcnParser.h
-    Source/NcnParser.cpp
-    Source/SoundFontSynth.h
-    Source/SoundFontSynth.cpp
-    Source/MidiPlayer.h
-    Source/MidiPlayer.cpp
-    Source/AudioGraphManager.h
-    Source/AudioGraphManager.cpp
-    Source/MixerController.h
-    Source/MixerController.cpp
-    Source/MidiHelper.h
-    Source/MidiHelper.cpp
-    Source/KaraokeEngine.h
-    Source/KaraokeEngine.cpp
-    Source/YouTubeService.h
-    Source/YouTubeService.cpp
-    Source/YouTubePlayerComponent.h
-    Source/YouTubePlayerComponent.cpp
-    Source/LyricsView.h
-    Source/LyricsView.cpp
-    Source/MixerComponent.h
-    Source/MixerComponent.cpp
-    Source/SongListView.h
-    Source/SongListView.cpp
-    Source/sqlite3.c
-    Source/DatabaseManager.h
-    Source/DatabaseManager.cpp
-    Source/LibraryScanner.h
-    Source/LibraryScanner.cpp
-    Source/QueueManager.h
-    Source/QueueManager.cpp
+
+    # UI Layer
+    Source/UI/MainComponent.h
+    Source/UI/MainComponent.cpp
+    Source/UI/LyricsView.h
+    Source/UI/LyricsView.cpp
+    Source/UI/MixerComponent.h
+    Source/UI/MixerComponent.cpp
+    Source/UI/SongListView.h
+    Source/UI/SongListView.cpp
+    Source/UI/YouTubePlayerComponent.h
+    Source/UI/YouTubePlayerComponent.cpp
+    Source/UI/QueueComponent.h
+    Source/UI/SynthMixerWindow.h
+    Source/UI/SettingsComponent.h
+    Source/UI/SettingsComponent.cpp
+    Source/UI/BottomBarComponent.h
+    Source/UI/BottomBarComponent.cpp
+    Source/UI/LookAndFeel_PK.h
+
+    # Services
+    Source/Services/YouTubeService.h
+    Source/Services/YouTubeService.cpp
+
+    # Core/Instruments
+    Source/Core/Instruments/IInstrumentSource.h
+    Source/Core/Instruments/SF2Source.h
+    Source/Core/Instruments/SF2Source.cpp
+
+    # Core/Routing (NEW location for MixerController)
+    Source/Core/Routing/MixerController.h
+    Source/Core/Routing/MixerController.cpp
+
+    # Core/Plugins
+    Source/Core/Plugins/PluginHost.h
+    Source/Core/Plugins/PluginHost.cpp
+
+    # Core/MIDI
+    Source/Core/NcnParser.h
+    Source/Core/NcnParser.cpp
+    Source/Core/MidiPlayer.h
+    Source/Core/MidiPlayer.cpp
+    Source/Core/MidiHelper.h
+    Source/Core/MidiHelper.cpp
+    Source/Core/QueueManager.h
+    Source/Core/QueueManager.cpp
+
+    # Engine
+    Source/Core/KaraokeEngine.h
+    Source/Core/KaraokeEngine.cpp
+
+    # Audio (SoundFontSynth.h kept as header only; TSF_IMPLEMENTATION is in SF2Source.cpp)
+    Source/Audio/AudioGraphManager.h
+    Source/Audio/AudioGraphManager.cpp
+    Source/Audio/SoundFontSynth.h
+
+    # Database
+    Source/Database/sqlite3.c
+    Source/Database/DatabaseManager.h
+    Source/Database/DatabaseManager.cpp
+    Source/Database/LibraryScanner.h
+    Source/Database/LibraryScanner.cpp
 )
+
+# Add Source directory to include path
+target_include_directories(PKKaraokeVST3 PRIVATE Source)
 
 # Enable VST3 Hosting and Web Browser
 target_compile_definitions(PKKaraokeVST3 PUBLIC

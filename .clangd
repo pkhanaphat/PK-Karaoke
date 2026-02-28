@@ -1,0 +1,17 @@
+CompileFlags:
+  Add:
+    # JuceHeader.h generated location
+    - "-ID:/PK Karaoke Player/Build/PKKaraokeVST3_artefacts/JuceLibraryCode"
+    # JUCE modules source
+    - "-ID:/PK Karaoke Player/Build/_deps/juce-src/modules"
+    # Project source root (for includes like "Core/...", "Audio/...")
+    - "-ID:/PK Karaoke Player/Source"
+    # Build dir (for any generated headers)
+    - "-ID:/PK Karaoke Player/Build"
+    # Required JUCE defines
+    - -DJUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+    - -DJUCE_PLUGINHOST_VST3=1
+    - -DJUCE_WEB_BROWSER=1
+    - -DJUCE_USE_CURL=1
+    - -DJUCE_STANDALONE_APPLICATION=1
+    - -std=c++20
