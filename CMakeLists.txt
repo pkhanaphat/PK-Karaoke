@@ -1,24 +1,28 @@
 cmake_minimum_required(VERSION 3.20)
+
+set(CMAKE_SYSTEM_VERSION "10.0.22621.0" CACHE STRING "Force Windows SDK version")
+
 project(PKKaraokeVST3 VERSION 1.0.0)
 
-# Fetch JUCE automatically (using relatively recent stable version)
-include(FetchContent)
-FetchContent_Declare(
-    juce
-    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG        8.0.4 # Latest stable as of mid 2024
-)
-FetchContent_MakeAvailable(juce)
+# Use local JUCE installation
+add_subdirectory("e:/juce-8.0.12-windows/JUCE" "e:/PK Karaoke VST3/Build/JUCE")
 
 # Create the executable target
 juce_add_gui_app(PKKaraokeVST3
     PRODUCT_NAME "PK Karaoke Player"
     VERSION 1.0.0
-    COMPANY_NAME "PK SOFT"
+    COMPANY_NAME "PKSOFT"
+    BUNDLE_ID "com.pksoft.pkkaraokeplayer"
 )
+
+
 
 # Enforce C++20
 target_compile_features(PKKaraokeVST3 PUBLIC cxx_std_20)
+
+target_compile_options(PKKaraokeVST3 PRIVATE
+    "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>"
+)
 
 # Source files
 target_sources(PKKaraokeVST3 PRIVATE
@@ -97,8 +101,17 @@ target_compile_definitions(PKKaraokeVST3 PUBLIC
     JUCE_USE_CURL=1
 )
 
-# Link against JUCE modules
+# Add binary data (Fonts, Assets)
+juce_add_binary_data(PKKaraokeVST3_BinaryData
+    HEADER_NAME "BinaryData.h"
+    NAMESPACE "BinaryData"
+    SOURCES
+        Source/Resources/tahoma.ttf
+)
+
+# Link against JUCE modules and Binary Data
 target_link_libraries(PKKaraokeVST3 PRIVATE
+    PKKaraokeVST3_BinaryData
     juce::juce_core
     juce::juce_events
     juce::juce_graphics

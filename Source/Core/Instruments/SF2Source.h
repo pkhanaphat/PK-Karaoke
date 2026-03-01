@@ -4,7 +4,6 @@
 #include "Core/Routing/MixerController.h"
 #include <JuceHeader.h>
 
-
 /**
  * SF2Source — SoundFont (.sf2) Instrument สำหรับ PK Karaoke
  * Extends juce::AudioProcessor เพื่อใช้ใน AudioProcessorGraph ได้โดยตรง
@@ -56,6 +55,8 @@ private:
   double currentSampleRate = 44100.0;
   int maxSamplesPerBlock = 1024;
   juce::HeapBlock<float> interleavedBuffer;
+
+  std::map<InstrumentGroup, tsf *> drumSynths;
 
   void freeSynths();
   void renderChannels(juce::AudioBuffer<float> &dest, int startSample,

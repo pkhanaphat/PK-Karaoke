@@ -83,11 +83,13 @@ struct TrackState {
   std::atomic<float> pan{0.5f};    // 0 = Left, 0.5 = Center, 1 = Right
   std::atomic<float> gain{1.0f};   // Input trim/gain
   std::atomic<float> auxSends[3];  // 0: Reverb, 1: Delay, 2: Chorus
+  std::atomic<int> transpose{0};   // Transpose in semitones
 
   std::atomic<bool> isMuted{false};
   std::atomic<bool> isSolo{false};
 
-  std::atomic<float> currentMagnitude{0.0f}; // Current peak level for meters
+  std::atomic<float> currentPeakLeft{0.0f};  // Current peak level for L meter
+  std::atomic<float> currentPeakRight{0.0f}; // Current peak level for R meter
 
   TrackState() {
     for (int i = 0; i < 3; ++i)
@@ -100,9 +102,11 @@ struct TrackState {
     gain.store(other.gain.load());
     for (int i = 0; i < 3; ++i)
       auxSends[i].store(other.auxSends[i].load());
+    transpose.store(other.transpose.load());
     isMuted.store(other.isMuted.load());
     isSolo.store(other.isSolo.load());
-    currentMagnitude.store(other.currentMagnitude.load());
+    currentPeakLeft.store(other.currentPeakLeft.load());
+    currentPeakRight.store(other.currentPeakRight.load());
   }
 };
 
@@ -129,10 +133,17 @@ public:
   void setTrackSolo(InstrumentGroup group, bool shouldSolo);
   bool isTrackSolo(InstrumentGroup group) const;
 
+  bool isAnySoloActive() const { return anySoloActive; }
+  bool isEffectivelyMuted(InstrumentGroup group) const;
+
   bool isTrackPlaying(InstrumentGroup group) const;
 
-  float getTrackLevel(InstrumentGroup group) const;
-  void setTrackLevel(InstrumentGroup group, float peak);
+  float getTrackLevelLeft(InstrumentGroup group) const;
+  float getTrackLevelRight(InstrumentGroup group) const;
+  void setTrackLevel(InstrumentGroup group, float peakL, float peakR);
+
+  void setTrackTranspose(InstrumentGroup group, int transposeValue);
+  int getTrackTranspose(InstrumentGroup group) const;
 
   void initializeTrack(InstrumentGroup group);
 

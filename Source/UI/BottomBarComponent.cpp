@@ -29,14 +29,23 @@ BottomBarComponent::BottomBarComponent() {
   playButton = std::make_unique<IconButton>("Play", playPath);
   stopButton = std::make_unique<IconButton>("Stop", stopPath);
   nextButton = std::make_unique<IconButton>("Next", nextPath);
-  settingsButton = std::make_unique<IconButton>("Settings", settingsPath);
   mixerButton = std::make_unique<IconButton>("Mixer", mixerPath);
 
   addAndMakeVisible(*playButton);
   addAndMakeVisible(*stopButton);
   addAndMakeVisible(*nextButton);
-  addAndMakeVisible(*settingsButton);
   addAndMakeVisible(*mixerButton);
+
+  seekSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+  seekSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+  seekSlider.setRange(0.0, 1.0, 0.001);
+  seekSlider.onValueChange = [this]() {
+    // Only trigger seek if the user is dragging the thumb, not when updated
+    // programmatically
+    if (onSeekChanged && seekSlider.isMouseButtonDown())
+      onSeekChanged(seekSlider.getValue());
+  };
+  addAndMakeVisible(seekSlider);
 
   playButton->onClick = [this] {
     if (onPlayClicked)
@@ -50,10 +59,6 @@ BottomBarComponent::BottomBarComponent() {
     if (onNextClicked)
       onNextClicked();
   };
-  settingsButton->onClick = [this] {
-    if (onSettingsClicked)
-      onSettingsClicked();
-  };
   mixerButton->onClick = [this] {
     if (onMixerClicked)
       onMixerClicked();
@@ -63,31 +68,37 @@ BottomBarComponent::BottomBarComponent() {
 BottomBarComponent::~BottomBarComponent() {}
 
 void BottomBarComponent::paint(juce::Graphics &g) {
-  g.setColour(juce::Colour(0xff1A1A1B).withAlpha(0.95f));
-  g.fillRoundedRectangle(getLocalBounds().toFloat(), 15.0f);
+  g.setColour(juce::Colour(0xff333333).withAlpha(0.95f)); // Match bgSecondary
+  g.fillRect(getLocalBounds().toFloat());
 
-  g.setColour(juce::Colours::white.withAlpha(0.1f));
-  g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 15.0f, 1.0f);
+  // Removed outline
 }
 
 void BottomBarComponent::resized() {
-  auto bottomArea = getLocalBounds().reduced(
-      20, 15); // Add more padding to shrink buttons visually
+  auto bottomArea =
+      getLocalBounds().reduced(20, 8); // Adjust padding for smaller height
 
-  int btnWidth = 40; // Reduced from 50
-  settingsButton->setBounds(bottomArea.removeFromLeft(btnWidth));
+  int btnWidth = 24; // Scaled down button width
+
+  // Mixer button goes to rightmost
   mixerButton->setBounds(bottomArea.removeFromRight(btnWidth));
+  bottomArea.removeFromRight(15); // Add some spacing before the slider
 
-  // Center play/stop/next
-  int centerX = bottomArea.getWidth() / 2 + bottomArea.getX();
-  int centerGroupWidth = btnWidth * 3 + 20; // 3 buttons + spacing
-  auto centerArea =
-      juce::Rectangle<int>(centerX - centerGroupWidth / 2, bottomArea.getY(),
-                           centerGroupWidth, bottomArea.getHeight());
+  // Left-aligned playback buttons
+  playButton->setBounds(bottomArea.removeFromLeft(btnWidth));
+  bottomArea.removeFromLeft(10);
+  stopButton->setBounds(bottomArea.removeFromLeft(btnWidth));
+  bottomArea.removeFromLeft(10);
+  nextButton->setBounds(bottomArea.removeFromLeft(btnWidth));
+  bottomArea.removeFromLeft(20); // Spacing before slider starts
 
-  playButton->setBounds(centerArea.removeFromLeft(btnWidth));
-  centerArea.removeFromLeft(10);
-  stopButton->setBounds(centerArea.removeFromLeft(btnWidth));
-  centerArea.removeFromLeft(10);
-  nextButton->setBounds(centerArea.removeFromLeft(btnWidth));
+  // The rest of the area goes to the seek slider
+  seekSlider.setBounds(bottomArea);
+}
+
+void BottomBarComponent::updateSeekPosition(double normalizedPosition) {
+  // Only update if the user isn't actively dragging the slider
+  if (!seekSlider.isMouseButtonDown()) {
+    seekSlider.setValue(normalizedPosition, juce::dontSendNotification);
+  }
 }

@@ -24,12 +24,10 @@ public:
   ~QueueComponent() override { queueManager.removeChangeListener(this); }
 
   void paint(juce::Graphics &g) override {
-    g.setColour(juce::Colour(0xff1A1A1B).withAlpha(0.95f));
-    g.fillRoundedRectangle(getLocalBounds().toFloat(), 15.0f);
+    g.setColour(juce::Colour(0xff1E2124).withAlpha(0.95f)); // Match bgBase
+    g.fillRect(getLocalBounds().toFloat());
 
-    g.setColour(juce::Colours::white.withAlpha(0.1f));
-    g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 15.0f,
-                           1.0f);
+    // Removed outline
   }
 
   void resized() override {
@@ -50,8 +48,9 @@ public:
     if (juce::isPositiveAndBelow(rowNumber, queue.size())) {
       if (rowIsSelected) {
         auto selectionRect = juce::Rectangle<int>(width, height).reduced(4, 2);
-        g.setColour(juce::Colour(0xffA100FF).withAlpha(0.2f));
-        g.fillRoundedRectangle(selectionRect.toFloat(), 4.0f);
+        g.setColour(juce::Colour(0xff85C1E9)
+                        .withAlpha(0.2f)); // Match the new accent color
+        g.fillRect(selectionRect.toFloat());
       } else if (rowNumber % 2 != 0) {
         g.setColour(juce::Colours::white.withAlpha(0.02f));
         g.fillRect(0, 0, width, height);

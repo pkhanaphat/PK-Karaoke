@@ -1,6 +1,12 @@
 ﻿#include "Core/Routing/MixerController.h"
 
-MixerController::MixerController() {}
+MixerController::MixerController() {
+  // Initialize mandatory buses
+  initializeTrack(InstrumentGroup::MasterBus);
+  initializeTrack(InstrumentGroup::ReverbBus);
+  initializeTrack(InstrumentGroup::DelayBus);
+  initializeTrack(InstrumentGroup::ChorusBus);
+}
 
 void MixerController::initializeTrack(InstrumentGroup group) {
   const juce::ScopedLock sl(lock);
@@ -95,18 +101,54 @@ bool MixerController::isTrackSolo(InstrumentGroup group) const {
   return it != tracks.end() ? it->second.isSolo.load() : false;
 }
 
-float MixerController::getTrackLevel(InstrumentGroup group) const {
+bool MixerController::isEffectivelyMuted(InstrumentGroup group) const {
   const juce::ScopedLock sl(lock);
   auto it = tracks.find(group);
-  return it != tracks.end() ? it->second.currentMagnitude.load() : 0.0f;
+  if (it == tracks.end())
+    return true;
+
+  if (it->second.isMuted.load())
+    return true;
+
+  if (anySoloActive && !it->second.isSolo.load())
+    return true;
+
+  return false;
 }
 
-void MixerController::setTrackLevel(InstrumentGroup group, float peak) {
-  const juce::ScopedLock sl(lock);
+float MixerController::getTrackLevelLeft(InstrumentGroup group) const {
+  auto it = tracks.find(group);
+  if (it != tracks.end())
+    return it->second.currentPeakLeft.load();
+  return 0.0f;
+}
+
+float MixerController::getTrackLevelRight(InstrumentGroup group) const {
+  auto it = tracks.find(group);
+  if (it != tracks.end())
+    return it->second.currentPeakRight.load();
+  return 0.0f;
+}
+
+void MixerController::setTrackLevel(InstrumentGroup group, float peakL,
+                                    float peakR) {
   auto it = tracks.find(group);
   if (it != tracks.end()) {
-    it->second.currentMagnitude.store(peak);
+    it->second.currentPeakLeft.store(peakL);
+    it->second.currentPeakRight.store(peakR);
   }
+}
+
+void MixerController::setTrackTranspose(InstrumentGroup group,
+                                        int transposeValue) {
+  const juce::ScopedLock sl(lock);
+  tracks[group].transpose.store(juce::jlimit(-24, 24, transposeValue));
+}
+
+int MixerController::getTrackTranspose(InstrumentGroup group) const {
+  const juce::ScopedLock sl(lock);
+  auto it = tracks.find(group);
+  return it != tracks.end() ? it->second.transpose.load() : 0;
 }
 
 void MixerController::updateSoloState() {
@@ -132,9 +174,7 @@ void MixerController::processBuffer(juce::AudioBuffer<float> &buffer,
   if (gValue != 1.0f)
     buffer.applyGain(gValue);
 
-  // 2. Track Level (Pre-fader magnitude)
-  float mag = buffer.getMagnitude(0, buffer.getNumSamples());
-  state.currentMagnitude.store(mag);
+  // 2. Track Level (Post-fader magnitude, calculated at the end of function)
 
   // 3. Check Mute / Solo
   bool shouldPlay = true;
@@ -146,6 +186,8 @@ void MixerController::processBuffer(juce::AudioBuffer<float> &buffer,
 
   if (!shouldPlay) {
     buffer.clear();
+    state.currentPeakLeft.store(0.0f);
+    state.currentPeakRight.store(0.0f);
     return;
   }
 
@@ -162,4 +204,13 @@ void MixerController::processBuffer(juce::AudioBuffer<float> &buffer,
     buffer.applyGain(1, 0, buffer.getNumSamples(),
                      juce::jmin(1.0f, pValue * 2.0f));
   }
+
+  // Peak calculation is now stored at the very end of processBuffer
+  // (Post-fader)
+  float magL = buffer.getMagnitude(0, 0, buffer.getNumSamples());
+  float magR = buffer.getNumChannels() > 1
+                   ? buffer.getMagnitude(1, 0, buffer.getNumSamples())
+                   : magL;
+  state.currentPeakLeft.store(magL);
+  state.currentPeakRight.store(magR);
 }

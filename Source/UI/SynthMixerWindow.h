@@ -12,13 +12,12 @@ public:
             juce::Desktop::getInstance().getDefaultLookAndFeel().findColour(
                 juce::ResizableWindow::backgroundColourId),
             DocumentWindow::allButtons) {
-    setUsingNativeTitleBar(true);
+    setUsingNativeTitleBar(false);
     setContentOwned(new MixerComponent(mc), true);
-    setResizable(true, false);
-    setResizeLimits(600, 400, 2000, 1200);
+    setResizable(false, false);
+    setAlwaysOnTop(true);
 
-    centreWithSize(1000, 600);
-    setVisible(true);
+    centreWithSize(1380, 500);
   }
 
   void closeButtonPressed() override {
@@ -29,4 +28,3 @@ public:
 private:
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SynthMixerWindow)
 };
-

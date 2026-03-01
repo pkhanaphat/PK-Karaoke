@@ -22,6 +22,7 @@ public:
   void paint(juce::Graphics &g) override;
   void resized() override;
   void timerCallback() override;
+  void mouseDown(const juce::MouseEvent &event) override;
 
 private:
   KaraokeEngine &karaokeEngine;
@@ -40,7 +41,7 @@ private:
   SettingsComponent settingsComponent;
   std::unique_ptr<juce::FileChooser> chooser;
 
-  LookAndFeel_PK lookAndFeel;
+  LookAndFeel_PK_Modern lookAndFeel;
 
   DatabaseManager dbManager;
   LibraryScanner libraryScanner{dbManager};
@@ -58,7 +59,8 @@ private:
   juce::Rectangle<int> queueBounds;
   juce::Rectangle<int> bottomBarBounds;
 
-  void showNativePopup(juce::Component *comp, juce::Rectangle<int> bounds);
+  void showNativePopup(juce::Component *comp, juce::Rectangle<int> bounds,
+                       bool isTemporary = true);
   void hideNativePopup(juce::Component *comp);
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)

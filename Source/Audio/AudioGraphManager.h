@@ -39,6 +39,7 @@ public:
   void initialiseGraph();
   bool loadVstPlugin(const juce::String &pluginPath, int instrumentChannel);
   void setSoundFont(const juce::File &sf2File);
+  void resetSynthesizers();
 
   // Playback
   void getNextAudioBlock(juce::AudioBuffer<float> &buffer, int numSamples,

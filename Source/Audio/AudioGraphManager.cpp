@@ -6,7 +6,7 @@ AudioGraphManager::AudioGraphManager(MixerController &mc)
               .withInput("Input", juce::AudioChannelSet::stereo(), true)
               .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       mixerController(mc) {
-  formatManager.addDefaultFormats();
+  formatManager.addFormat(new juce::VST3PluginFormat());
   initialiseGraph();
 }
 
@@ -83,6 +83,30 @@ void AudioGraphManager::setSoundFont(const juce::File &sf2File) {
   if (sf2SynthNode != nullptr) {
     if (auto *synth = dynamic_cast<SF2Source *>(sf2SynthNode->getProcessor()))
       synth->loadSoundFont(sf2File);
+  }
+}
+
+void AudioGraphManager::resetSynthesizers() {
+  juce::MidiBuffer resetBuffer;
+  for (int channel = 1; channel <= 16; ++channel) {
+    resetBuffer.addEvent(juce::MidiMessage::allSoundOff(channel), 0);
+    resetBuffer.addEvent(juce::MidiMessage::controllerEvent(channel, 121, 0),
+                         0); // Reset All Controllers
+    resetBuffer.addEvent(juce::MidiMessage::allNotesOff(channel), 0);
+    resetBuffer.addEvent(juce::MidiMessage::controllerEvent(channel, 0, 0),
+                         0); // Bank Select MSB
+    resetBuffer.addEvent(juce::MidiMessage::controllerEvent(channel, 32, 0),
+                         0); // Bank Select LSB
+    resetBuffer.addEvent(juce::MidiMessage::programChange(channel, 0), 0);
+  }
+
+  // Workaround: Direct MIDI injection for the reset buffer
+  if (sf2SynthNode != nullptr) {
+    if (auto *synth = sf2SynthNode->getProcessor()) {
+      juce::AudioBuffer<float> dummyBuffer(2, 64);
+      dummyBuffer.clear();
+      synth->processBlock(dummyBuffer, resetBuffer);
+    }
   }
 }
 

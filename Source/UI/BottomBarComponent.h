@@ -10,6 +10,7 @@ public:
 
   void paint(juce::Graphics &g) override;
   void resized() override;
+  void updateSeekPosition(double normalizedPosition);
 
   // Custom Button class for precise icon control
   class IconButton : public juce::Button {
@@ -21,22 +22,21 @@ public:
                      bool isButtonDown) override {
       auto area = getLocalBounds().toFloat();
 
-      // Draw circular button background
-      g.setColour(juce::Colours::white.withAlpha(
-          isButtonDown ? 0.8f : (isMouseOverButton ? 1.0f : 0.9f)));
-      g.fillEllipse(area.reduced(2.0f));
+      // No background, just the icon itself.
+      // Use less reduction since there's no background circle padding needed.
+      auto iconArea = area.reduced(2.0f);
 
-      // Icon padding
-      auto iconArea = area.reduced(13.0f);
-
-      // Center and scale icon
       auto transform = iconPath.getTransformToScaleToFit(
           iconArea, true, juce::Justification::centred);
 
-      // Use Dark Charcoal for icon to contrast with white button
-      g.setColour(juce::Colour(0xff1A1A1B));
+      // Icon color: White normally, slightly dimmed on hover, more dimmed on
+      // press
       if (isButtonDown)
-        g.setColour(juce::Colours::black);
+        g.setColour(juce::Colours::white.withAlpha(0.5f));
+      else if (isMouseOverButton)
+        g.setColour(juce::Colours::white.withAlpha(0.8f));
+      else
+        g.setColour(juce::Colours::white);
 
       g.fillPath(iconPath, transform);
     }
@@ -48,12 +48,13 @@ public:
   std::function<void()> onPlayClicked;
   std::function<void()> onStopClicked;
   std::function<void()> onNextClicked;
-  std::function<void()> onSettingsClicked;
+  std::function<void(double)>
+      onSeekChanged; // Callback taking the new normalized position (0.0 to 1.0)
   std::function<void()> onMixerClicked;
 
 private:
-  std::unique_ptr<IconButton> playButton, stopButton, nextButton,
-      settingsButton, mixerButton;
+  std::unique_ptr<IconButton> playButton, stopButton, nextButton, mixerButton;
+  juce::Slider seekSlider;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BottomBarComponent)
 };

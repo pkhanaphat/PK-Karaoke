@@ -4,6 +4,10 @@
 #define TSF_IMPLEMENTATION
 #include "Audio/tsf.h"
 
+static void LOG_CRASH(const juce::String &msg) {
+  juce::File("C:\\temp\\crash.log").appendText(msg + "\n");
+}
+
 SF2Source::SF2Source(MixerController *mixerController)
     : AudioProcessor(BusesProperties().withOutput(
           "Output", juce::AudioChannelSet::stereo(), true)),
@@ -21,18 +25,28 @@ SF2Source::~SF2Source() {
 }
 
 void SF2Source::freeSynths() {
+  LOG_CRASH("freeSynths: Start");
   if (mainSynth != nullptr) {
     tsf_close(mainSynth);
     mainSynth = nullptr;
   }
-  for (int i = 0; i < 16; ++i)
+  for (int i = 0; i < 16; ++i) {
     if (channelSynths[i] != nullptr) {
       tsf_close(channelSynths[i]);
       channelSynths[i] = nullptr;
     }
+  }
+  for (auto &pair : drumSynths) {
+    if (pair.second != nullptr) {
+      tsf_close(pair.second);
+    }
+  }
+  drumSynths.clear();
+  LOG_CRASH("freeSynths: End");
 }
 
 bool SF2Source::loadSoundFont(const juce::File &sf2File) {
+  LOG_CRASH("loadSoundFont: Start");
   const juce::ScopedLock sl(lock);
   freeSynths();
 
@@ -46,15 +60,35 @@ bool SF2Source::loadSoundFont(const juce::File &sf2File) {
         tsf_set_output(channelSynths[i], TSF_STEREO_INTERLEAVED,
                        (int)currentSampleRate, 0.0f);
       }
+
+      // Initialize separate synths for each drum group
+      std::vector<InstrumentGroup> drumGroups = {
+          InstrumentGroup::Kick,        InstrumentGroup::Snare,
+          InstrumentGroup::HiHat,       InstrumentGroup::HiTom,
+          InstrumentGroup::MidTom,      InstrumentGroup::LowTom,
+          InstrumentGroup::CrashCymbal, InstrumentGroup::RideCymbal,
+          InstrumentGroup::HandClap,    InstrumentGroup::Tambourine,
+          InstrumentGroup::Cowbell,     InstrumentGroup::Bongo,
+          InstrumentGroup::Conga,       InstrumentGroup::Timbale,
+          InstrumentGroup::ThaiChing,   InstrumentGroup::PercussionDrum};
+      for (auto group : drumGroups) {
+        drumSynths[group] = tsf_copy(mainSynth);
+        tsf_set_output(drumSynths[group], TSF_STEREO_INTERLEAVED,
+                       (int)currentSampleRate, 0.0f);
+      }
+
       DBG("SF2Source: Loaded " + sf2File.getFullPathName());
+      LOG_CRASH("loadSoundFont: End Success");
       return true;
     }
   }
   DBG("SF2Source: Failed to load " + sf2File.getFullPathName());
+  LOG_CRASH("loadSoundFont: End Failed");
   return false;
 }
 
 void SF2Source::prepareToPlay(double sampleRate, int samplesPerBlock) {
+  LOG_CRASH("prepareToPlay: Start");
   const juce::ScopedLock sl(lock);
   currentSampleRate = sampleRate;
   maxSamplesPerBlock = samplesPerBlock;
@@ -63,10 +97,18 @@ void SF2Source::prepareToPlay(double sampleRate, int samplesPerBlock) {
   if (mainSynth != nullptr) {
     tsf_set_output(mainSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,
                    0.0f);
-    for (int i = 0; i < 16; ++i)
-      if (channelSynths[i] != nullptr)
+    for (int i = 0; i < 16; ++i) {
+      if (channelSynths[i] != nullptr) {
         tsf_set_output(channelSynths[i], TSF_STEREO_INTERLEAVED,
                        (int)currentSampleRate, 0.0f);
+      }
+    }
+    for (auto &pair : drumSynths) {
+      if (pair.second != nullptr) {
+        tsf_set_output(pair.second, TSF_STEREO_INTERLEAVED,
+                       (int)currentSampleRate, 0.0f);
+      }
+    }
   }
 }
 
@@ -79,24 +121,50 @@ void SF2Source::setSFVolume(float linearGain) {
   currentVolume = linearGain;
   if (mainSynth != nullptr) {
     tsf_set_volume(mainSynth, currentVolume);
-    for (int i = 0; i < 16; ++i)
-      if (channelSynths[i] != nullptr)
+    for (int i = 0; i < 16; ++i) {
+      if (channelSynths[i] != nullptr) {
         tsf_set_volume(channelSynths[i], currentVolume);
+      }
+    }
+    for (auto &pair : drumSynths) {
+      if (pair.second != nullptr) {
+        tsf_set_volume(pair.second, currentVolume);
+      }
+    }
   }
 }
 
 void SF2Source::processBlock(juce::AudioBuffer<float> &buffer,
                              juce::MidiBuffer &midiMessages) {
+  LOG_CRASH("processBlock: Start");
   juce::ScopedNoDenormals noDenormals;
   const juce::ScopedLock sl(lock);
 
   if (mainSynth == nullptr) {
     buffer.clear();
+    LOG_CRASH("processBlock: End (No Synth)");
     return;
+  }
+
+  // Double check that our internal arrays are not partially initialized during
+  // a race
+  for (int i = 0; i < 16; ++i) {
+    if (channelSynths[i] == nullptr) {
+      buffer.clear();
+      return;
+    }
   }
 
   const int numSamples = buffer.getNumSamples();
   int currentSample = 0;
+
+  if (interleavedBuffer.getData() == nullptr ||
+      numSamples > maxSamplesPerBlock) {
+    if (numSamples > maxSamplesPerBlock) {
+      maxSamplesPerBlock = numSamples;
+    }
+    interleavedBuffer.malloc(maxSamplesPerBlock * 2);
+  }
 
   juce::AudioBuffer<float> mixBuffer(2, numSamples);
   mixBuffer.clear();
@@ -122,27 +190,15 @@ void SF2Source::processBlock(juce::AudioBuffer<float> &buffer,
 void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
                                int numSamples) {
   float *interleaved = interleavedBuffer.get();
-  std::map<InstrumentGroup, float> groupPeaks;
+  std::map<InstrumentGroup, std::pair<float, float>> groupPeaks;
 
   for (int ch = 0; ch < 16; ++ch) {
-    if (channelSynths[ch] == nullptr)
+    if (isDrumChannel[ch] || channelSynths[ch] == nullptr)
       continue;
 
     tsf_render_float(channelSynths[ch], interleaved, numSamples, 0);
 
-    InstrumentGroup group =
-        isDrumChannel[ch] ? InstrumentGroup::PercussionDrum
-                          : MidiHelper::getInstrumentType(channelPrograms[ch]);
-
-    // Calculate peak magnitude for VU Meter
-    float peak = 0.0f;
-    for (int i = 0; i < numSamples * 2; ++i) {
-      float absVal = std::abs(interleaved[i]);
-      if (absVal > peak)
-        peak = absVal;
-    }
-
-    groupPeaks[group] = std::max(groupPeaks[group], peak);
+    InstrumentGroup group = MidiHelper::getInstrumentType(channelPrograms[ch]);
 
     float vol = currentVolume;
     float pan = 0.5f;
@@ -155,6 +211,10 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
       pan = mixer->getTrackPan(group);
     }
 
+    // Calculate peak magnitude for VU Meter AFTER volume scaling and panning
+    float peakL = 0.0f;
+    float peakR = 0.0f;
+
     if (vol > 0.001f) {
       const float leftGain = vol * juce::jmin(1.0f, (1.0f - pan) * 2.0f);
       const float rightGain = vol * juce::jmin(1.0f, pan * 2.0f);
@@ -163,15 +223,74 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
       auto *mixR = dest.getWritePointer(1, startSample);
 
       for (int i = 0; i < numSamples; ++i) {
-        mixL[i] += interleaved[i * 2] * leftGain;
-        mixR[i] += interleaved[i * 2 + 1] * rightGain;
+        float sampleL = interleaved[i * 2] * leftGain;
+        float sampleR = interleaved[i * 2 + 1] * rightGain;
+
+        mixL[i] += sampleL;
+        mixR[i] += sampleR;
+
+        if (std::abs(sampleL) > peakL)
+          peakL = std::abs(sampleL);
+        if (std::abs(sampleR) > peakR)
+          peakR = std::abs(sampleR);
       }
     }
+
+    groupPeaks[group].first = std::max(groupPeaks[group].first, peakL);
+    groupPeaks[group].second = std::max(groupPeaks[group].second, peakR);
+  }
+
+  // Render separate Drum buses
+  for (auto &pair : drumSynths) {
+    auto group = pair.first;
+    auto synth = pair.second;
+    if (synth == nullptr)
+      continue;
+
+    tsf_render_float(synth, interleaved, numSamples, 0);
+
+    float vol = currentVolume;
+    float pan = 0.5f;
+
+    if (mixer != nullptr) {
+      if (!mixer->isTrackPlaying(group))
+        vol = 0.0f;
+      else
+        vol *= mixer->getTrackVolume(group);
+      pan = mixer->getTrackPan(group);
+    }
+
+    // Calculate peak magnitude for VU Meter AFTER volume scaling and panning
+    float peakL = 0.0f;
+    float peakR = 0.0f;
+
+    if (vol > 0.001f) {
+      const float leftGain = vol * juce::jmin(1.0f, (1.0f - pan) * 2.0f);
+      const float rightGain = vol * juce::jmin(1.0f, pan * 2.0f);
+
+      auto *mixL = dest.getWritePointer(0, startSample);
+      auto *mixR = dest.getWritePointer(1, startSample);
+
+      for (int i = 0; i < numSamples; ++i) {
+        float sampleL = interleaved[i * 2] * leftGain;
+        float sampleR = interleaved[i * 2 + 1] * rightGain;
+
+        mixL[i] += sampleL;
+        mixR[i] += sampleR;
+
+        if (std::abs(sampleL) > peakL)
+          peakL = std::abs(sampleL);
+        if (std::abs(sampleR) > peakR)
+          peakR = std::abs(sampleR);
+      }
+    }
+    groupPeaks[group].first = std::max(groupPeaks[group].first, peakL);
+    groupPeaks[group].second = std::max(groupPeaks[group].second, peakR);
   }
 
   if (mixer != nullptr) {
     for (const auto &pair : groupPeaks) {
-      mixer->setTrackLevel(pair.first, pair.second);
+      mixer->setTrackLevel(pair.first, pair.second.first, pair.second.second);
     }
   }
 }
@@ -186,18 +305,67 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
   if (synth == nullptr)
     return;
 
-  if (msg.isNoteOn())
-    tsf_channel_note_on(synth, channel, msg.getNoteNumber(),
-                        msg.getFloatVelocity());
-  else if (msg.isNoteOff())
-    tsf_channel_note_off(synth, channel, msg.getNoteNumber());
-  else if (msg.isProgramChange()) {
+  InstrumentGroup group =
+      MidiHelper::getInstrumentType(channelPrograms[channel]);
+  if (isDrumChannel[channel]) {
+    group = MidiHelper::getInstrumentDrumType(msg.getNoteNumber());
+  }
+
+  int transpose = 0;
+  if (mixer != nullptr && !isDrumChannel[channel]) {
+    transpose = mixer->getTrackTranspose(group);
+  }
+
+  if (msg.isNoteOn()) {
+    float velocity = msg.getFloatVelocity();
+    if (isDrumChannel[channel]) {
+      auto it = drumSynths.find(group);
+      if (it != drumSynths.end() && it->second != nullptr) {
+        synth = it->second;
+      }
+    }
+
+    // Only play if not fully muted
+    if (velocity > 0.001f) {
+      tsf_channel_note_on(synth, channel,
+                          juce::jlimit(0, 127, msg.getNoteNumber() + transpose),
+                          juce::jlimit(0.0f, 1.0f, velocity));
+    }
+  } else if (msg.isNoteOff()) {
+    if (isDrumChannel[channel]) {
+      auto it = drumSynths.find(group);
+      if (it != drumSynths.end() && it->second != nullptr) {
+        synth = it->second;
+      }
+    }
+    tsf_channel_note_off(synth, channel,
+                         juce::jlimit(0, 127, msg.getNoteNumber() + transpose));
+  } else if (msg.isProgramChange()) {
     const int prog = msg.getProgramChangeNumber();
     channelPrograms[channel] = prog;
     tsf_channel_set_presetnumber(synth, channel, prog, (channel == 9));
-  } else if (msg.isPitchWheel())
+    if (isDrumChannel[channel]) {
+      for (auto &pair : drumSynths) {
+        tsf_channel_set_presetnumber(pair.second, channel, prog, 1);
+      }
+    }
+  } else if (msg.isPitchWheel()) {
     tsf_channel_set_pitchwheel(synth, channel, msg.getPitchWheelValue());
-  else if (msg.isController())
+    if (isDrumChannel[channel]) {
+      for (auto &pair : drumSynths) {
+        tsf_channel_set_pitchwheel(pair.second, channel,
+                                   msg.getPitchWheelValue());
+      }
+    }
+  } else if (msg.isController()) {
     tsf_channel_midi_control(synth, channel, msg.getControllerNumber(),
                              msg.getControllerValue());
+    if (isDrumChannel[channel]) {
+      for (auto &pair : drumSynths) {
+        tsf_channel_midi_control(pair.second, channel,
+                                 msg.getControllerNumber(),
+                                 msg.getControllerValue());
+      }
+    }
+  }
 }

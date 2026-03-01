@@ -1,7 +1,7 @@
 ﻿#include "Core/Plugins/PluginHost.h"
 
 PluginHost::PluginHost() {
-  formatManager.addDefaultFormats();
+  formatManager.addFormat(new juce::VST3PluginFormat());
   DBG("PluginHost: Initialized with " << formatManager.getNumFormats()
                                       << " formats");
 }
@@ -44,7 +44,8 @@ void PluginHost::doScan(const juce::File &folder) {
 
     juce::OwnedArray<juce::PluginDescription> results;
 
-    // เธชเนเธเธเธซเธฒ plugins เธ—เธธเธ subfolder เธ”เนเธงเธข
+    // เธชเนเธเธเธซเธฒ plugins เธ—เธธเธ subfolder
+    // เธ”เนเธงเธข
     const auto vst3Files = folder.findChildFiles(
         juce::File::findFilesAndDirectories, true, "*.vst3");
 
@@ -70,4 +71,3 @@ PluginHost::loadPlugin(const juce::PluginDescription &desc, double sampleRate,
   return formatManager.createPluginInstance(desc, sampleRate, blockSize,
                                             errorMessage);
 }
-

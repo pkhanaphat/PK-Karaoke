@@ -1,6 +1,8 @@
-﻿#include "Core/KaraokeEngine.h"
+﻿#include "BinaryData.h"
+#include "Core/KaraokeEngine.h"
 #include "UI/MainComponent.h"
 #include <JuceHeader.h>
+
 
 class PKKaraokeApplication : public juce::JUCEApplication {
 public:
@@ -15,6 +17,16 @@ public:
   bool moreThanOneInstanceAllowed() override { return true; }
 
   void initialise(const juce::String &commandLine) override {
+    // Force Embedded Thai Font globally for JUCE 8
+    juce::Typeface::Ptr tahomaTypeface =
+        juce::Typeface::createSystemTypefaceFor(BinaryData::tahoma_ttf,
+                                                BinaryData::tahoma_ttfSize);
+
+    if (tahomaTypeface != nullptr) {
+      juce::LookAndFeel::getDefaultLookAndFeel().setDefaultSansSerifTypeface(
+          tahomaTypeface);
+    }
+
     // Set up Audio
     audioDeviceManager.initialiseWithDefaultDevices(2, 2);
     audioPlayer.setProcessor(&karaokeEngine);
@@ -44,7 +56,9 @@ public:
       setUsingNativeTitleBar(false);
       setContentOwned(new MainComponent(*engine), true);
 
-      setResizable(true, true);
+      // Disable resizing to prevent double-click from restoring down/shrinking
+      // the fullscreen window.
+      setResizable(false, false);
 
       // Use a true borderless fullscreen window instead of Kiosk Mode
       // Kiosk Mode aggressively minimises when it loses focus (e.g. Windows key
@@ -57,6 +71,10 @@ public:
       auto display =
           desktop.getDisplays().findDisplayForPoint(desktop.getMousePosition());
       setBounds(display.totalArea);
+
+      // Prevent the window from being dragged by clicking its content since we
+      // have no title bar
+      setDraggable(false);
 
       setVisible(true);
     }

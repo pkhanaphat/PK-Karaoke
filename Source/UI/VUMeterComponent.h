@@ -1,7 +1,5 @@
 #pragma once
 
-#include <JuceHeader.h>
-
 class VUMeterComponent : public juce::Component, public juce::Timer {
 public:
   VUMeterComponent() {
@@ -51,29 +49,34 @@ public:
     // Draw solid black background to prevent ghosting
     g.fillAll(juce::Colours::black);
 
-    const int numSegments = 40;
-    const int gap = 1; // 1px gap to fit 40 segments nicely
+    const int numSegments = 30; // Fewer segments for a cleaner look
+    const float gap = 1.0f;     // 1px gap
 
     float totalHeight = (float)area.getHeight();
-    float segmentHeight = (totalHeight - (numSegments - 1) * gap) / numSegments;
+    float totalGaps = (numSegments - 1) * gap;
+    float segmentHeight = (totalHeight - totalGaps) / numSegments;
 
+    // Draw from bottom to top
     for (int i = 0; i < numSegments; ++i) {
-      // Index 0 is bottom, numSegments-1 is top
-      float yPos = totalHeight - (i + 1) * (segmentHeight + gap) + gap;
+      // Calculate continuous Y position
+      float bottomY = totalHeight - (i * (segmentHeight + gap));
+      float topY = bottomY - segmentHeight;
 
       // Calculate normalized threshold for this segment
-      // 1.12 is approx +1dB. With 40 segments, the red zone (starts at 36)
-      // begins at +1dB.
-      float segmentThreshold = (i + 1) * (1.12f / 36.0f);
+      float segmentThreshold = (i + 1) * (1.12f / (numSegments * 0.9f));
 
       bool isActive = level >= segmentThreshold;
-      bool isPeak = peakLevel >= segmentThreshold &&
-                    peakLevel < segmentThreshold + (1.12f / 36.0f);
+      bool isPeak =
+          peakLevel >= segmentThreshold &&
+          peakLevel < segmentThreshold + (1.12f / (numSegments * 0.9f));
 
       juce::Colour segmentColour;
-      if (i < 30) {
-        segmentColour = juce::Colours::green;
-      } else if (i < 36) {
+      int yellowThreshold = numSegments * 0.75;
+      int redThreshold = numSegments * 0.9;
+
+      if (i < yellowThreshold) {
+        segmentColour = juce::Colour(0xff00cc00); // Green
+      } else if (i < redThreshold) {
         segmentColour = juce::Colours::yellow;
       } else {
         segmentColour = juce::Colours::red;
@@ -87,7 +90,8 @@ public:
         g.setColour(segmentColour.withAlpha(0.12f));
       }
 
-      g.fillRect(area.getX(), (int)yPos, area.getWidth(), (int)segmentHeight);
+      g.fillRect(juce::Rectangle<float>((float)area.getX(), topY,
+                                        (float)area.getWidth(), segmentHeight));
     }
   }
 

@@ -1,4 +1,5 @@
-﻿#include "UI/MainComponent.h"
+#include "UI/MainComponent.h"
+#include "UI/SettingsComponent.h"
 
 // ============================================================
 // Helpers: บันทึก/โหลด settings ด้วย JUCE PropertiesFile
@@ -34,12 +35,29 @@ static juce::String loadSetting(const juce::String &key) {
 }
 
 //==============================================================================
+class SettingsWindowContainer : public juce::DocumentWindow {
+public:
+  SettingsWindowContainer(const juce::String &name,
+                          juce::Colour backgroundColour, int requiredButtons)
+      : DocumentWindow(name, backgroundColour, requiredButtons) {}
+
+  void closeButtonPressed() override { setVisible(false); }
+};
+
+//==============================================================================
 MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
   juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
-  setLookAndFeel(&lookAndFeel);
 
+  bottomBar = std::make_unique<BottomBarComponent>();
+  juce::Logger::writeToLog("MainComponent: Start constructor");
+
+  // Explicitly set look and feel for member components created before
+  // setDefaultLookAndFeel
+  settingsComponent.setLookAndFeel(&lookAndFeel);
+  lyricsView.setLookAndFeel(&lookAndFeel);
   songListView.setLookAndFeel(&lookAndFeel);
   queueComponent.setLookAndFeel(&lookAndFeel);
+
   // bottomBar is a unique_ptr, will set after creating it.
 
   setSize(1000, 700);
@@ -57,8 +75,8 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
   queueComponent.setVisible(false);
 
   // Settings Panel Initialization
-  settingsComponent.setOnLoadDbClicked([this]() {
-    juce::String lastFolder = loadSetting("lastMusicFolder");
+  settingsComponent.setOnLoadNcnClicked([this]() {
+    juce::String lastFolder = loadSetting("lastNcnFolder");
     juce::File startDir =
         lastFolder.isNotEmpty() && juce::File(lastFolder).isDirectory()
             ? juce::File(lastFolder)
@@ -72,11 +90,42 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
     chooser->launchAsync(chooserFlags, [this](const juce::FileChooser &fc) {
       auto dir = fc.getResult();
       if (dir.isDirectory()) {
-        saveSetting("lastMusicFolder", dir.getFullPathName());
-        juce::MessageManager::callAsync(
-            [this, dir]() { libraryScanner.startScan(dir); });
+        saveSetting("lastNcnFolder", dir.getFullPathName());
+        settingsComponent.setNcnPath(dir.getFullPathName());
       }
     });
+  });
+
+  settingsComponent.setOnLoadPkmClicked([this]() {
+    juce::String lastFolder = loadSetting("lastPkmFolder");
+    juce::File startDir =
+        lastFolder.isNotEmpty() && juce::File(lastFolder).isDirectory()
+            ? juce::File(lastFolder)
+            : juce::File::getSpecialLocation(juce::File::userHomeDirectory);
+
+    chooser = std::make_unique<juce::FileChooser>("Select PKM Karaoke Folder",
+                                                  startDir);
+
+    auto chooserFlags = juce::FileBrowserComponent::canSelectDirectories;
+
+    chooser->launchAsync(chooserFlags, [this](const juce::FileChooser &fc) {
+      auto dir = fc.getResult();
+      if (dir.isDirectory()) {
+        saveSetting("lastPkmFolder", dir.getFullPathName());
+        settingsComponent.setPkmPath(dir.getFullPathName());
+      }
+    });
+  });
+
+  settingsComponent.setOnBuildDbClicked([this]() {
+    juce::String ncnPath = loadSetting("lastNcnFolder");
+    if (ncnPath.isNotEmpty()) {
+      juce::File ncnDir(ncnPath);
+      if (ncnDir.isDirectory()) {
+        juce::MessageManager::callAsync(
+            [this, ncnDir]() { libraryScanner.startScan(ncnDir); });
+      }
+    }
   });
 
   settingsComponent.setOnLoadSf2Clicked([this]() {
@@ -104,26 +153,50 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
     });
   });
 
+  juce::Logger::writeToLog("MainComponent: Loading Database");
+  juce::String dbPath = loadSetting("lastDbPath");
+
+  // Set up Scanner Callbacks
+  libraryScanner.onStatusChanged = [this](juce::String status) {
+    juce::MessageManager::callAsync([this, status]() {
+      // We can add a generic status label later, or just show it via debug
+      // For now, let's keep it simple
+    });
+  };
+
+  libraryScanner.onProgressChanged = [this](int percent) {
+    juce::MessageManager::callAsync([this, percent]() {
+      settingsComponent.setDbProgress(percent / 100.0);
+    });
+  };
+
+  libraryScanner.onScanFinished = [this]() {
+    juce::MessageManager::callAsync([this]() {
+      settingsComponent.setTotalSongs(dbManager.getTotalCount());
+      songListView.refreshList();
+    });
+  };
+
   // Start the timer to track mouse hover (100ms interval)
   startTimer(100);
 
   // Setup Bottom Bar
   bottomBar = std::make_unique<BottomBarComponent>();
   bottomBar->setLookAndFeel(&lookAndFeel);
+  addAndMakeVisible(bottomBar.get());
 
   bottomBar->onPlayClicked = [this]() { karaokeEngine.play(); };
   bottomBar->onStopClicked = [this]() { karaokeEngine.stop(); };
   bottomBar->onNextClicked = [this]() {};
 
-  bottomBar->onSettingsClicked = [this]() {
-    if (settingsWindow == nullptr) {
-      settingsWindow = std::make_unique<juce::DocumentWindow>(
-          "Settings", juce::Colours::black, juce::DocumentWindow::closeButton);
-      settingsWindow->setContentNonOwned(&settingsComponent, true);
-      settingsWindow->centreWithSize(400, 300);
-      settingsWindow->setUsingNativeTitleBar(true);
+  bottomBar->onSeekChanged = [this](double normalizedPosition) {
+    if (karaokeEngine.getMidiPlayer().isPlaying()) {
+      double totalLengthSeconds = karaokeEngine.getMidiPlayer().getDuration();
+      if (totalLengthSeconds > 0) {
+        double newTime = normalizedPosition * totalLengthSeconds;
+        karaokeEngine.getMidiPlayer().setPosition(newTime);
+      }
     }
-    settingsWindow->setVisible(!settingsWindow->isVisible());
   };
 
   bottomBar->onMixerClicked = [this]() {
@@ -141,31 +214,21 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
         [this]() { lyricsView.setLyrics(karaokeEngine.getCurrentLyrics()); });
   };
 
-  // Initialize Database
-  juce::File dbFile =
-      juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-          .getChildFile("PKKaraoke")
-          .getChildFile("songs.db");
+  // Initialize Database in the /Songs folder
+  juce::File appDir =
+      juce::File::getSpecialLocation(juce::File::currentExecutableFile)
+          .getParentDirectory();
+  juce::File songsDir = appDir.getChildFile("Songs");
+  songsDir.createDirectory(); // Ensure the directory exists
+  juce::File dbFile = songsDir.getChildFile("songs.db");
 
   if (dbManager.initialize(dbFile)) {
     songListView.setDatabaseManager(&dbManager);
+    settingsComponent.setTotalSongs(dbManager.getTotalCount());
     DBG("Database OK, count: " + juce::String(dbManager.getTotalCount()));
   }
 
-  // Set up Scanner Callbacks
-  libraryScanner.onStatusChanged = [this](juce::String status) {
-    juce::MessageManager::callAsync(
-        [this, status]() { settingsComponent.setDbButtonText(status); });
-  };
-
-  libraryScanner.onScanFinished = [this]() {
-    juce::MessageManager::callAsync([this]() {
-      settingsComponent.setDbButtonText(
-          "DB Created (" + juce::String(dbManager.getTotalCount()) + " songs)");
-      songListView.refreshList();
-    });
-  };
-
+  juce::Logger::writeToLog("MainComponent: Loading previous paths");
   // ─── โหลด paths ที่บันทึกไว้ก่อนหน้า ───────────────────────────────────────
   {
     juce::String lastSF2 = loadSetting("lastSF2Path");
@@ -178,17 +241,15 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
       }
     }
 
-    juce::String lastMusic = loadSetting("lastMusicFolder");
-    if (lastMusic.isNotEmpty()) {
-      juce::File musicDir(lastMusic);
-      if (musicDir.isDirectory()) {
-        settingsComponent.setDbButtonText(musicDir.getFileName() + " (saved)");
-        DBG("Last music folder: " + lastMusic);
-      }
+    juce::String lastNcn = loadSetting("lastNcnFolder");
+    if (lastNcn.isNotEmpty()) {
+      settingsComponent.setNcnPath(lastNcn);
+    }
+    juce::String lastPkm = loadSetting("lastPkmFolder");
+    if (lastPkm.isNotEmpty()) {
+      settingsComponent.setPkmPath(lastPkm);
     }
   }
-
-  // Button callbacks (Now handled in BottomBarComponent)
 
   // List callback
   songListView.onSongSelected = [this](const SongRecord &entry) {
@@ -199,11 +260,18 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
       karaokeEngine.play();
     }
   };
+
+  // Listen to mouse events on this component and all children to handle
+  // right-clicks globally
+  addMouseListener(this, true);
+
+  juce::Logger::writeToLog("MainComponent: Constructor complete");
 }
 
 MainComponent::~MainComponent() {
   stopTimer();
   appProps().saveIfNeeded(); // บันทึกก่อนปิด
+  juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
 }
 
 //==============================================================================
@@ -265,32 +333,26 @@ void MainComponent::timerCallback() {
     }
   }
 
-  // --- Bottom Panel (Controls) Logic ---
-  bottomBarBounds = juce::Rectangle<int>(0, getHeight() - 70, getWidth(), 70);
-  if (!isBottomBarVisible && mousePos.y > getHeight() - edgeThreshold &&
-      isInsideWindow) {
-    isBottomBarVisible = true;
-    bottomPanelHideTimerMs = 0;
-    showNativePopup(bottomBar.get(), bottomBarBounds);
-  } else if (isBottomBarVisible) {
-    auto screenMousePos = juce::Desktop::getInstance().getMousePosition();
-    if (bottomBarBounds.translated(getScreenX(), getScreenY())
-            .expanded(20, 20)
-            .contains(screenMousePos)) {
-      bottomPanelHideTimerMs = 0;
-    } else {
-      bottomPanelHideTimerMs += 100;
-      if (bottomPanelHideTimerMs >= 2000) {
-        isBottomBarVisible = false;
-        hideNativePopup(bottomBar.get());
+  // --- Update Seek Slider ---
+  if (bottomBar != nullptr) {
+    auto &player = karaokeEngine.getMidiPlayer();
+    if (player.isPlaying()) {
+      double currentPos = player.getPosition();
+      double totalLen = player.getDuration();
+      if (totalLen > 0.0) {
+        bottomBar->updateSeekPosition(currentPos / totalLen);
+      } else {
+        bottomBar->updateSeekPosition(0.0);
       }
+    } else {
+      bottomBar->updateSeekPosition(0.0);
     }
   }
 }
 
 //==============================================================================
 void MainComponent::paint(juce::Graphics &g) {
-  g.fillAll(juce::Colours::black);
+  g.fillAll(findColour(juce::ResizableWindow::backgroundColourId));
 }
 
 void MainComponent::resized() {
@@ -300,12 +362,16 @@ void MainComponent::resized() {
   songListBounds = juce::Rectangle<int>(0, 0, panelWidth, getHeight());
   queueBounds =
       juce::Rectangle<int>(getWidth() - panelWidth, 0, panelWidth, getHeight());
-  bottomBarBounds = juce::Rectangle<int>(0, getHeight() - 70, getWidth(), 70);
+  bottomBarBounds = juce::Rectangle<int>(0, getHeight() - 40, getWidth(), 40);
 
   // For WebView2, it must be exactly the size of the container, no shrinking
-  youtubePlayer.setBounds(area);
-  lyricsView.setBounds(area);
+  // But we subtract 40 from the bottom so the Bottom Bar is strictly underneath
+  auto mainArea = area.withTrimmedBottom(40);
+  youtubePlayer.setBounds(mainArea);
+  lyricsView.setBounds(mainArea);
   lyricsView.toFront(false);
+
+  bottomBar->setBounds(bottomBarBounds);
 
   // If popups are active during a resize (e.g., window restored), update their
   // bounds natively
@@ -315,13 +381,11 @@ void MainComponent::resized() {
   if (isQueueVisible) {
     showNativePopup(&queueComponent, queueBounds);
   }
-  if (isBottomBarVisible) {
-    showNativePopup(bottomBar.get(), bottomBarBounds);
-  }
 }
 
 void MainComponent::showNativePopup(juce::Component *comp,
-                                    juce::Rectangle<int> bounds) {
+                                    juce::Rectangle<int> bounds,
+                                    bool isTemporary) {
   if (comp == nullptr)
     return;
 
@@ -332,9 +396,12 @@ void MainComponent::showNativePopup(juce::Component *comp,
   if (comp->isOnDesktop()) {
     comp->setBounds(screenBounds);
   } else {
-    comp->addToDesktop(juce::ComponentPeer::windowIsTemporary |
-                       juce::ComponentPeer::windowIgnoresKeyPresses |
-                       juce::ComponentPeer::windowHasDropShadow);
+    int windowFlags = juce::ComponentPeer::windowIgnoresKeyPresses |
+                      juce::ComponentPeer::windowHasDropShadow;
+    if (isTemporary)
+      windowFlags |= juce::ComponentPeer::windowIsTemporary;
+
+    comp->addToDesktop(windowFlags);
     comp->setBounds(screenBounds);
     comp->setOpaque(false); // Enable transparency
     comp->setVisible(true);
@@ -346,5 +413,32 @@ void MainComponent::hideNativePopup(juce::Component *comp) {
   if (comp != nullptr && comp->isOnDesktop()) {
     comp->removeFromDesktop();
     comp->setVisible(false);
+  }
+}
+
+void MainComponent::mouseDown(const juce::MouseEvent &event) {
+  if (event.mods.isPopupMenu()) {
+    juce::PopupMenu menu;
+    menu.setLookAndFeel(&lookAndFeel);
+    menu.addItem("Settings", [this]() {
+      if (settingsWindow == nullptr) {
+        settingsWindow = std::make_unique<SettingsWindowContainer>(
+            "Settings",
+            lookAndFeel.findColour(juce::ResizableWindow::backgroundColourId),
+            juce::DocumentWindow::closeButton);
+        settingsWindow->setLookAndFeel(&lookAndFeel);
+        settingsWindow->setContentNonOwned(&settingsComponent, true);
+        settingsWindow->centreWithSize(400, 300);
+        settingsWindow->setUsingNativeTitleBar(false);
+      }
+      settingsWindow->setVisible(true);
+      settingsWindow->toFront(true);
+    });
+    menu.addSeparator();
+    menu.addItem("Exit", []() {
+      juce::JUCEApplication::getInstance()->systemRequestedQuit();
+    });
+
+    menu.showMenuAsync(juce::PopupMenu::Options());
   }
 }

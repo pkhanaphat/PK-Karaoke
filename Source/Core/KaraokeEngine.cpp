@@ -59,7 +59,11 @@ void KaraokeEngine::play() {
 
 void KaraokeEngine::pause() { midiPlayer.pause(); }
 
-void KaraokeEngine::stop() { midiPlayer.stop(); }
+void KaraokeEngine::stop() {
+  midiPlayer.stop();
+  graphManager.resetSynthesizers(); // Explicitly clear hanging
+                                    // notes/controllers on stop
+}
 
 void KaraokeEngine::loadSoundFont(const juce::File &sf2File) {
   graphManager.setSoundFont(sf2File);
@@ -118,6 +122,11 @@ void KaraokeEngine::checkQueue() {
 
     if (loadSong(midFile, lyrFile, curFile)) {
       DBG("KaraokeEngine: loadSong success. Triggering callback and play().");
+
+      // Reset synths right before playing the new song to clear old
+      // bank/program states
+      graphManager.resetSynthesizers();
+
       if (onSongLoaded)
         onSongLoaded();
       play();
@@ -131,4 +140,3 @@ void KaraokeEngine::checkQueue() {
 
 void KaraokeEngine::getStateInformation(juce::MemoryBlock &destData) {}
 void KaraokeEngine::setStateInformation(const void *data, int sizeInBytes) {}
-

@@ -1,4 +1,4 @@
-﻿#include "Core/MidiHelper.h"
+#include "Core/MidiHelper.h"
 
 std::vector<InstrumentGroup> MidiHelper::getDrumInstrumentTypes() {
   return {InstrumentGroup::Kick,       InstrumentGroup::Snare,
@@ -117,15 +117,15 @@ juce::String MidiHelper::getThaiName(InstrumentGroup type) {
   case InstrumentGroup::ChromaticPercussion:
     return "Chromatic";
   case InstrumentGroup::ThaiRanad:
-    return juce::String::fromUTF8("เธฃเธฐเธเธฒเธ”");
+    return u8"ระนาด";
   case InstrumentGroup::ThaiPongLang:
-    return juce::String::fromUTF8("เนเธเธเธฅเธฒเธ");
+    return u8"โปงลาง";
   case InstrumentGroup::Organ:
     return "Organ";
   case InstrumentGroup::Accordion:
     return "Accordion";
   case InstrumentGroup::ThaiKaen:
-    return juce::String::fromUTF8("เนเธเธ");
+    return u8"แคน";
   case InstrumentGroup::AcousticGuitarNylon:
     return "Gt.Nylon";
   case InstrumentGroup::AcousticGuitarSteel:
@@ -153,9 +153,9 @@ juce::String MidiHelper::getThaiName(InstrumentGroup type) {
   case InstrumentGroup::Pipe:
     return "Pipe";
   case InstrumentGroup::ThaiKlui:
-    return juce::String::fromUTF8("เธเธฅเธธเนเธข");
+    return u8"ขลุ่ย";
   case InstrumentGroup::ThaiWote:
-    return juce::String::fromUTF8("เนเธซเธงเธ”");
+    return u8"โหวด";
   case InstrumentGroup::SynthLead:
     return "SynthLead";
   case InstrumentGroup::SynthPad:
@@ -165,7 +165,7 @@ juce::String MidiHelper::getThaiName(InstrumentGroup type) {
   case InstrumentGroup::Ethnic:
     return "Ethnic";
   case InstrumentGroup::ThaiPoengMang:
-    return juce::String::fromUTF8("เน€เธเธดเธเธกเธฒเธ");
+    return u8"เปิงมาง";
   case InstrumentGroup::Percussive:
     return "Percussive";
 
@@ -198,9 +198,12 @@ juce::String MidiHelper::getThaiName(InstrumentGroup type) {
   case InstrumentGroup::Timbale:
     return "Timbale";
   case InstrumentGroup::ThaiChing:
-    return juce::String::fromUTF8("เธเธดเนเธ");
+    return u8"ฉิ่ง";
   case InstrumentGroup::PercussionDrum:
     return "Percussion";
+
+  case InstrumentGroup::VocalBus:
+    return "Vocal";
 
   case InstrumentGroup::VSTi1:
     return "VSTi 1";
@@ -220,18 +223,15 @@ juce::String MidiHelper::getThaiName(InstrumentGroup type) {
     return "VSTi 8";
 
   case InstrumentGroup::ReverbBus:
-    return "Reverb";
+    return "FX1";
   case InstrumentGroup::DelayBus:
-    return "Delay";
+    return "FX2";
   case InstrumentGroup::ChorusBus:
-    return "Chorus";
+    return "FX3";
   case InstrumentGroup::MasterBus:
     return "Master";
-  case InstrumentGroup::VocalBus:
-    return "Vocals";
 
   default:
     return "Unknown";
   }
 }
-
