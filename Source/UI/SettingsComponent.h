@@ -48,6 +48,7 @@ public:
   void setOnLoadNcnClicked(std::function<void()> callback);
   void setOnLoadPkmClicked(std::function<void()> callback);
   void setOnBuildDbClicked(std::function<void()> callback);
+  void setOnLoadBgClicked(std::function<void()> callback);
 
   // Backwards compatibility / other tabs
   void setOnLoadSf2Clicked(std::function<void()> callback);
@@ -80,6 +81,9 @@ private:
   std::function<void()> onLoadPkmClicked;
   std::function<void()> onBuildDbClicked;
   std::function<void()> onLoadSf2Clicked;
+  std::function<void()> onLoadBgClicked;
+
+  juce::TextButton loadBgButton{"Load Background Image"};
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SettingsComponent)
 };

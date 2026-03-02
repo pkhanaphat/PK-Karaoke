@@ -26,6 +26,11 @@ void LyricsView::attachToPlayer(MidiPlayer *player) {
     stopTimer();
 }
 
+void LyricsView::setCustomBackgroundImage(const juce::Image &newImage) {
+  backgroundImage = newImage;
+  repaint();
+}
+
 void LyricsView::timerCallback() {
   if (attachedPlayer != nullptr) {
     int newTime = attachedPlayer->getPositionTicks();

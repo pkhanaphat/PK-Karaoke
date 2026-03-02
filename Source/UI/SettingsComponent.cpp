@@ -96,6 +96,9 @@ SettingsComponent::SettingsComponent() {
   sf2Panel.addAndMakeVisible(sf2Button);
   sf2Button.setButtonText(u8"เลือก SoundFont");
 
+  generalPanel.addAndMakeVisible(loadBgButton);
+  loadBgButton.setButtonText(u8"เลือกภาพพื้นหลัง (Background)");
+
   dbPanel.ncnBrowseButton.onClick = [this]() {
     if (onLoadNcnClicked)
       onLoadNcnClicked();
@@ -114,6 +117,11 @@ SettingsComponent::SettingsComponent() {
   sf2Button.onClick = [this]() {
     if (onLoadSf2Clicked)
       onLoadSf2Clicked();
+  };
+
+  loadBgButton.onClick = [this]() {
+    if (onLoadBgClicked)
+      onLoadBgClicked();
   };
 }
 
@@ -134,6 +142,8 @@ void SettingsComponent::resized() {
   tabs.setBounds(area);
 
   sf2Button.setBounds(sf2Panel.getLocalBounds().withSizeKeepingCentre(200, 40));
+  loadBgButton.setBounds(
+      generalPanel.getLocalBounds().withSizeKeepingCentre(200, 40));
 }
 
 void SettingsComponent::setOnLoadNcnClicked(std::function<void()> callback) {
@@ -150,6 +160,10 @@ void SettingsComponent::setOnBuildDbClicked(std::function<void()> callback) {
 
 void SettingsComponent::setOnLoadSf2Clicked(std::function<void()> callback) {
   onLoadSf2Clicked = callback;
+}
+
+void SettingsComponent::setOnLoadBgClicked(std::function<void()> callback) {
+  onLoadBgClicked = callback;
 }
 
 void SettingsComponent::setNcnPath(const juce::String &path) {

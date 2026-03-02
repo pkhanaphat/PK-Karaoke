@@ -153,6 +153,33 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
     });
   });
 
+  settingsComponent.setOnLoadBgClicked([this]() {
+    juce::String lastBg = loadSetting("lastBgPath");
+    juce::File startDir =
+        lastBg.isNotEmpty()
+            ? juce::File(lastBg).getParentDirectory()
+            : juce::File::getSpecialLocation(juce::File::userPicturesDirectory);
+
+    chooser = std::make_unique<juce::FileChooser>(
+        "Select Background Image", startDir, "*.png;*.jpg;*.jpeg");
+
+    auto chooserFlags = juce::FileBrowserComponent::openMode |
+                        juce::FileBrowserComponent::canSelectFiles;
+
+    chooser->launchAsync(chooserFlags, [this](const juce::FileChooser &fc) {
+      auto file = fc.getResult();
+      if (file.existsAsFile()) {
+        saveSetting("lastBgPath", file.getFullPathName());
+        juce::Image newImage = juce::ImageCache::getFromFile(file);
+        if (newImage.isValid()) {
+          juce::MessageManager::callAsync([this, newImage]() {
+            lyricsView.setCustomBackgroundImage(newImage);
+          });
+        }
+      }
+    });
+  });
+
   juce::Logger::writeToLog("MainComponent: Loading Database");
   juce::String dbPath = loadSetting("lastDbPath");
 
@@ -248,6 +275,18 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
     juce::String lastPkm = loadSetting("lastPkmFolder");
     if (lastPkm.isNotEmpty()) {
       settingsComponent.setPkmPath(lastPkm);
+    }
+
+    juce::String lastBg = loadSetting("lastBgPath");
+    if (lastBg.isNotEmpty()) {
+      juce::File bgFile(lastBg);
+      if (bgFile.existsAsFile()) {
+        juce::Image autoImg = juce::ImageCache::getFromFile(bgFile);
+        if (autoImg.isValid()) {
+          lyricsView.setCustomBackgroundImage(autoImg);
+          DBG("Auto-loaded BG: " + lastBg);
+        }
+      }
     }
   }
 

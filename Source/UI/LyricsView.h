@@ -5,7 +5,6 @@
 #include <BinaryData.h>
 #include <JuceHeader.h>
 
-
 class LyricsView : public juce::Component, public juce::Timer {
 public:
   LyricsView();
@@ -16,6 +15,7 @@ public:
 
   void setLyrics(const SongLyrics &newLyrics);
   void attachToPlayer(MidiPlayer *player);
+  void setCustomBackgroundImage(const juce::Image &newImage);
 
   // Call this repeatedly or use a timer to ask the player for position
   void timerCallback() override;
