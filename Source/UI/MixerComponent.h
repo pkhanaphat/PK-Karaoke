@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include "Audio/AudioGraphManager.h"
 #include "Core/Routing/MixerController.h"
 #include "UI/CubaseMeterComponent.h"
 #include "UI/LookAndFeel_PK_Mixer.h"
@@ -150,10 +151,11 @@ private:
 class ChannelStripComponent : public juce::Component,
                               public juce::Slider::Listener,
                               public juce::Button::Listener,
+                              public juce::ComboBox::Listener,
                               public juce::Timer {
 public:
-  ChannelStripComponent(MixerController &mc, InstrumentGroup group,
-                        const juce::String &name);
+  ChannelStripComponent(MixerController &mc, AudioGraphManager &agm,
+                        InstrumentGroup group, const juce::String &name);
   ~ChannelStripComponent() override;
 
   void paint(juce::Graphics &) override;
@@ -163,6 +165,7 @@ public:
 
   void sliderValueChanged(juce::Slider *slider) override;
   void buttonClicked(juce::Button *button) override;
+  void comboBoxChanged(juce::ComboBox *comboBoxThatHasChanged) override;
 
   void updateStateFromController();
 
@@ -173,6 +176,7 @@ public:
 
 private:
   MixerController &mixerController;
+  AudioGraphManager &audioGraphManager;
   InstrumentGroup trackGroup;
   juce::Label nameLabel;
 
@@ -180,6 +184,8 @@ private:
   juce::Slider transposeScale;
   juce::TextButton muteButton;
   juce::TextButton soloButton;
+  juce::ComboBox sf2ComboBox;
+  juce::ComboBox outputSelector;   // Output Routing
   juce::TextButton insertSlots[4]; // Insert FX slots (VST)
   CubaseMeterComponent meter;
   juce::Slider volumeFader;
@@ -187,6 +193,7 @@ private:
   juce::Image instrumentIcon;
   juce::Rectangle<int> iconBounds;
   bool isExpanded = true;
+  std::unique_ptr<juce::FileChooser> pluginChooser;
 
   void loadIcon();
 
@@ -200,8 +207,8 @@ class FXStripComponent : public juce::Component,
                          public juce::Slider::Listener,
                          public juce::Timer {
 public:
-  FXStripComponent(MixerController &mc, InstrumentGroup group,
-                   const juce::String &name);
+  FXStripComponent(MixerController &mc, AudioGraphManager &agm,
+                   InstrumentGroup group, const juce::String &name);
   ~FXStripComponent() override;
 
   void paint(juce::Graphics &) override;
@@ -217,6 +224,7 @@ public:
 
 private:
   MixerController &mixerController;
+  AudioGraphManager &audioGraphManager;
   InstrumentGroup fxGroup;
   juce::String fxName;
 
@@ -227,6 +235,7 @@ private:
   juce::Image instrumentIcon;
   juce::Rectangle<int> iconBounds;
   bool isExpanded = true;
+  std::unique_ptr<juce::FileChooser> pluginChooser;
 
   void loadIcon();
 
@@ -240,7 +249,7 @@ class MasterStripComponent : public juce::Component,
                              public juce::Slider::Listener,
                              public juce::Timer {
 public:
-  MasterStripComponent(MixerController &mc);
+  MasterStripComponent(MixerController &mc, AudioGraphManager &agm);
   ~MasterStripComponent() override;
 
   void paint(juce::Graphics &) override;
@@ -256,6 +265,7 @@ public:
 
 private:
   MixerController &mixerController;
+  AudioGraphManager &audioGraphManager;
   CubaseMeterComponent meterLeft;
   CubaseMeterComponent meterRight;
   juce::Label nameLabel;
@@ -264,6 +274,7 @@ private:
   juce::Image instrumentIcon;
   juce::Rectangle<int> iconBounds;
   bool isExpanded = true;
+  std::unique_ptr<juce::FileChooser> pluginChooser;
 
   void loadIcon();
 
@@ -275,7 +286,7 @@ private:
 //==============================================================================
 class MixerComponent : public juce::Component {
 public:
-  MixerComponent(MixerController &mc);
+  MixerComponent(MixerController &mc, AudioGraphManager &agm);
   ~MixerComponent() override;
 
   void paint(juce::Graphics &) override;
@@ -287,6 +298,7 @@ private:
   bool isExpandedLayout = true;
   void setupHeader();
   MixerController &mixerController;
+  AudioGraphManager &audioGraphManager;
 
   struct HeaderComponent : public juce::Component {
     HeaderComponent();

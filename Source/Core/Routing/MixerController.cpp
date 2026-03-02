@@ -160,6 +160,104 @@ void MixerController::updateSoloState() {
     }
 }
 
+void MixerController::setVstPluginPath(InstrumentGroup group, int slotIndex,
+                                       const juce::String &path) {
+  if (slotIndex < 0 || slotIndex >= 4)
+    return;
+  const juce::ScopedLock sl(lock);
+  tracks[group].inserts[slotIndex].path = path;
+}
+
+juce::String MixerController::getVstPluginPath(InstrumentGroup group,
+                                               int slotIndex) const {
+  if (slotIndex < 0 || slotIndex >= 4)
+    return {};
+  const juce::ScopedLock sl(lock);
+  auto it = tracks.find(group);
+  return it != tracks.end() ? it->second.inserts[slotIndex].path
+                            : juce::String{};
+}
+
+void MixerController::setVstPluginBypass(InstrumentGroup group, int slotIndex,
+                                         bool bypass) {
+  if (slotIndex < 0 || slotIndex >= 4)
+    return;
+  const juce::ScopedLock sl(lock);
+  tracks[group].inserts[slotIndex].isBypass = bypass;
+}
+
+bool MixerController::getVstPluginBypass(InstrumentGroup group,
+                                         int slotIndex) const {
+  if (slotIndex < 0 || slotIndex >= 4)
+    return false;
+  const juce::ScopedLock sl(lock);
+  auto it = tracks.find(group);
+  return it != tracks.end() ? it->second.inserts[slotIndex].isBypass : false;
+}
+
+void MixerController::setTrackOutputDestination(InstrumentGroup group,
+                                                OutputDestination dest) {
+  const juce::ScopedLock sl(lock);
+  if (tracks.find(group) == tracks.end()) {
+    tracks[group]; // initialize if not exists
+  }
+  tracks[group].outputDest.store(dest);
+}
+
+OutputDestination
+MixerController::getTrackOutputDestination(InstrumentGroup group) const {
+  const juce::ScopedLock sl(lock);
+  auto it = tracks.find(group);
+  return it != tracks.end() ? it->second.outputDest.load()
+                            : OutputDestination::SF2;
+}
+
+void MixerController::setTrackSF2Path(InstrumentGroup group,
+                                      const juce::String &path) {
+  const juce::ScopedLock sl(lock);
+  tracks[group].sf2Path = path;
+}
+
+juce::String MixerController::getTrackSF2Path(InstrumentGroup group) const {
+  const juce::ScopedLock sl(lock);
+  auto it = tracks.find(group);
+  return it != tracks.end() ? it->second.sf2Path : juce::String{};
+}
+
+void MixerController::setSF2Directory(const juce::File &directory) {
+  const juce::ScopedLock sl(lock);
+  sf2Directory = directory;
+  updateSF2List();
+}
+
+void MixerController::updateSF2List() {
+  const juce::ScopedLock sl(lock);
+  availableSf2Files.clear();
+  if (sf2Directory.isDirectory()) {
+    availableSf2Files =
+        sf2Directory.findChildFiles(juce::File::findFiles, true, "*.sf2");
+  }
+}
+
+juce::StringArray MixerController::getAvailableSF2Names() const {
+  const juce::ScopedLock sl(lock);
+  juce::StringArray names;
+  names.add("SF2 (Default)");
+  for (auto &file : availableSf2Files) {
+    names.add(file.getFileNameWithoutExtension());
+  }
+  return names;
+}
+
+juce::File MixerController::getSF2FileByName(const juce::String &name) const {
+  const juce::ScopedLock sl(lock);
+  for (auto &file : availableSf2Files) {
+    if (file.getFileNameWithoutExtension() == name)
+      return file;
+  }
+  return juce::File();
+}
+
 void MixerController::processBuffer(juce::AudioBuffer<float> &buffer,
                                     InstrumentGroup group) {
   const juce::ScopedLock sl(lock);

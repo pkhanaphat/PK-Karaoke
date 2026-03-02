@@ -1,9 +1,8 @@
 ﻿#include "UI/LyricsView.h"
 
 LyricsView::LyricsView() {
-  // Load background image from binary data
-  backgroundImage = juce::ImageCache::getFromMemory(BinaryData::bg_png,
-                                                    BinaryData::bg_pngSize);
+  // The background image will be set by MainComponent loading the config or
+  // default color.
 
   // Use a font that supports Thai characters. Arial usually works on Windows.
   // Or you can specify "Tahoma" or "Leelawadee UI".

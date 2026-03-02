@@ -39,6 +39,8 @@ private:
   std::unique_ptr<SynthMixerWindow> mixerWindow;
   std::unique_ptr<juce::DocumentWindow> settingsWindow;
   SettingsComponent settingsComponent;
+  std::unique_ptr<juce::DocumentWindow> vstiSettingsWindow;
+  VstiSettingsPanel vstiSettingsPanel;
   std::unique_ptr<juce::FileChooser> chooser;
 
   LookAndFeel_PK_Modern lookAndFeel;

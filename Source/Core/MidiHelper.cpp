@@ -205,23 +205,6 @@ juce::String MidiHelper::getThaiName(InstrumentGroup type) {
   case InstrumentGroup::VocalBus:
     return "Vocal";
 
-  case InstrumentGroup::VSTi1:
-    return "VSTi 1";
-  case InstrumentGroup::VSTi2:
-    return "VSTi 2";
-  case InstrumentGroup::VSTi3:
-    return "VSTi 3";
-  case InstrumentGroup::VSTi4:
-    return "VSTi 4";
-  case InstrumentGroup::VSTi5:
-    return "VSTi 5";
-  case InstrumentGroup::VSTi6:
-    return "VSTi 6";
-  case InstrumentGroup::VSTi7:
-    return "VSTi 7";
-  case InstrumentGroup::VSTi8:
-    return "VSTi 8";
-
   case InstrumentGroup::ReverbBus:
     return "FX1";
   case InstrumentGroup::DelayBus:

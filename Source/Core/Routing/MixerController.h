@@ -1,6 +1,9 @@
 ﻿#pragma once
 #include <JuceHeader.h>
+#include <atomic>
 #include <map>
+#include <vector>
+
 
 // InstrumentGroup เนเธฅเธฐ TrackState
 // เธขเนเธฒเธขเธกเธฒเธญเธขเธนเนเธ—เธตเน
@@ -61,21 +64,28 @@ enum class InstrumentGroup {
   // Vocal
   VocalBus = 149,
 
-  // VSTi slots
-  VSTi1 = 150,
+  // FX & Master Bus
+  ReverbBus = 200,
+  DelayBus,
+  ChorusBus,
+  MasterBus
+};
+
+struct VstPluginState {
+  juce::String path;
+  bool isBypass{false};
+};
+
+enum class OutputDestination {
+  SF2 = 0,
+  VSTi1,
   VSTi2,
   VSTi3,
   VSTi4,
   VSTi5,
   VSTi6,
   VSTi7,
-  VSTi8,
-
-  // FX & Master Bus
-  ReverbBus = 200,
-  DelayBus,
-  ChorusBus,
-  MasterBus
+  VSTi8
 };
 
 struct TrackState {
@@ -84,6 +94,10 @@ struct TrackState {
   std::atomic<float> gain{1.0f};   // Input trim/gain
   std::atomic<float> auxSends[3];  // 0: Reverb, 1: Delay, 2: Chorus
   std::atomic<int> transpose{0};   // Transpose in semitones
+  std::atomic<OutputDestination> outputDest{OutputDestination::SF2};
+
+  juce::String sf2Path;      // Custom SoundFont for this track
+  VstPluginState inserts[4]; // 4 Insert Slots
 
   std::atomic<bool> isMuted{false};
   std::atomic<bool> isSolo{false};
@@ -103,10 +117,14 @@ struct TrackState {
     for (int i = 0; i < 3; ++i)
       auxSends[i].store(other.auxSends[i].load());
     transpose.store(other.transpose.load());
+    outputDest.store(other.outputDest.load());
     isMuted.store(other.isMuted.load());
     isSolo.store(other.isSolo.load());
-    currentPeakLeft.store(other.currentPeakLeft.load());
-    currentPeakRight.store(other.currentPeakRight.load());
+    for (int i = 0; i < 4; ++i) {
+      inserts[i].path = other.inserts[i].path;
+      inserts[i].isBypass = other.inserts[i].isBypass;
+    }
+    sf2Path = other.sf2Path;
   }
 };
 
@@ -147,6 +165,26 @@ public:
 
   void initializeTrack(InstrumentGroup group);
 
+  void setVstPluginPath(InstrumentGroup group, int slotIndex,
+                        const juce::String &path);
+  juce::String getVstPluginPath(InstrumentGroup group, int slotIndex) const;
+
+  void setVstPluginBypass(InstrumentGroup group, int slotIndex, bool bypass);
+  bool getVstPluginBypass(InstrumentGroup group, int slotIndex) const;
+
+  void setTrackOutputDestination(InstrumentGroup group, OutputDestination dest);
+  OutputDestination getTrackOutputDestination(InstrumentGroup group) const;
+
+  void setTrackSF2Path(InstrumentGroup group, const juce::String &path);
+  juce::String getTrackSF2Path(InstrumentGroup group) const;
+
+  // SF2 Folder Scanning
+  void setSF2Directory(const juce::File &directory);
+  juce::File getSF2Directory() const { return sf2Directory; }
+  void updateSF2List();
+  juce::StringArray getAvailableSF2Names() const;
+  juce::File getSF2FileByName(const juce::String &name) const;
+
   // Called by AudioEngine inside processBlock
   void processBuffer(juce::AudioBuffer<float> &buffer, InstrumentGroup group);
 
@@ -155,6 +193,9 @@ private:
   bool anySoloActive = false;
   void updateSoloState();
   juce::CriticalSection lock;
+
+  juce::File sf2Directory;
+  juce::Array<juce::File> availableSf2Files;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixerController)
 };

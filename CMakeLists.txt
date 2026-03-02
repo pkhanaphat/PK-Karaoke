@@ -5,7 +5,7 @@ set(CMAKE_SYSTEM_VERSION "10.0.22621.0" CACHE STRING "Force Windows SDK version"
 project(PKKaraokeVST3 VERSION 1.0.0)
 
 # Use local JUCE installation
-add_subdirectory("e:/juce-8.0.12-windows/JUCE" "e:/PK Karaoke VST3/Build/JUCE")
+add_subdirectory("JUCE" "Build/JUCE")
 
 # Create the executable target
 juce_add_gui_app(PKKaraokeVST3
@@ -20,8 +20,12 @@ juce_add_gui_app(PKKaraokeVST3
 # Enforce C++20
 target_compile_features(PKKaraokeVST3 PUBLIC cxx_std_20)
 
+set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+
 target_compile_options(PKKaraokeVST3 PRIVATE
     "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>"
+    "$<$<CXX_COMPILER_ID:MSVC>:/MP>"
+    "$<$<CXX_COMPILER_ID:MSVC>:/Z7>"
 )
 
 # Source files
@@ -43,6 +47,8 @@ target_sources(PKKaraokeVST3 PRIVATE
     Source/UI/SynthMixerWindow.h
     Source/UI/SettingsComponent.h
     Source/UI/SettingsComponent.cpp
+    Source/UI/SplashComponent.h
+    Source/UI/SplashComponent.cpp
     Source/UI/BottomBarComponent.h
     Source/UI/BottomBarComponent.cpp
     Source/UI/LookAndFeel_PK.h
@@ -107,7 +113,6 @@ juce_add_binary_data(PKKaraokeVST3_BinaryData
     NAMESPACE "BinaryData"
     SOURCES
         Source/Resources/tahoma.ttf
-        Source/Resources/bg.png
 )
 
 # Link against JUCE modules and Binary Data

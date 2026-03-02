@@ -4,6 +4,9 @@
 #include "Core/MidiPlayer.h"
 #include "Core/Routing/MixerController.h"
 #include <JuceHeader.h>
+#include <array>
+#include <map>
+#include <memory>
 
 class AudioGraphManager : public juce::AudioProcessor {
 public:
@@ -37,8 +40,17 @@ public:
   //==============================================================================
   // Graph Management
   void initialiseGraph();
-  bool loadVstPlugin(const juce::String &pluginPath, int instrumentChannel);
+  void rebuildGraphRouting();
+
+  bool loadVstiPlugin(int slotIndex, const juce::String &pluginPath);
+  void removeVstiPlugin(int slotIndex);
+
+  bool loadVstFxPlugin(InstrumentGroup group, int slotIndex,
+                       const juce::String &pluginPath);
+  void removeVstFxPlugin(InstrumentGroup group, int slotIndex);
+
   void setSoundFont(const juce::File &sf2File);
+  void setTrackSoundFont(InstrumentGroup group, const juce::File &sf2File);
   void resetSynthesizers();
 
   // Playback
@@ -55,8 +67,14 @@ private:
   Node::Ptr audioOutputNode;
   Node::Ptr midiInputNode;
 
-  // Our internal SoundFont Synth
-  Node::Ptr sf2SynthNode;
+  // Our internal SoundFont Synths (one per active group for independent FX
+  // processing)
+  juce::File currentSoundFont;
+  std::map<InstrumentGroup, Node::Ptr> synthNodes;
+
+  std::map<int, Node::Ptr> vstiNodes;
+  std::map<int, Node::Ptr> vstiFilterNodes;
+  std::map<InstrumentGroup, std::array<Node::Ptr, 4>> vstFxNodes;
 
   MixerController &mixerController;
 

@@ -83,6 +83,89 @@ void DatabaseSettingsPanel::setTotalSongs(int count) {
   totalSongsLabel.setText(text, juce::dontSendNotification);
 }
 
+//==============================================================================
+VstiSettingsPanel::VstiSettingsPanel() {
+  for (int i = 0; i < 8; ++i) {
+    nameLabels[i].setText("Slot " + juce::String(i + 1) + ": Not Loaded",
+                          juce::dontSendNotification);
+    nameLabels[i].setColour(juce::Label::textColourId,
+                            juce::Colour(220, 220, 220));
+    addAndMakeVisible(nameLabels[i]);
+
+    loadButtons[i].setButtonText("Load VSTi...");
+    addAndMakeVisible(loadButtons[i]);
+    loadButtons[i].onClick = [this, i]() {
+      if (onLoadVstiClicked)
+        onLoadVstiClicked(i + 1);
+    };
+
+    removeButtons[i].setButtonText("Remove");
+    addAndMakeVisible(removeButtons[i]);
+    removeButtons[i].onClick = [this, i]() {
+      if (onRemoveVstiClicked)
+        onRemoveVstiClicked(i + 1);
+    };
+  }
+}
+
+void VstiSettingsPanel::paint(juce::Graphics &g) {
+  g.fillAll(juce::Colours::transparentBlack);
+  g.setColour(juce::Colours::white);
+  g.setFont(18.0f);
+  g.drawText(u8"จัดการ VSTi (Virtual Instruments)", 10, 10, 300, 30,
+             juce::Justification::centredLeft, true);
+}
+
+void VstiSettingsPanel::resized() {
+  auto area = getLocalBounds().reduced(20);
+  area.removeFromTop(40); // header space
+
+  for (int i = 0; i < 8; ++i) {
+    auto row = area.removeFromTop(30);
+    nameLabels[i].setBounds(row.removeFromLeft(200));
+    row.removeFromLeft(10);
+    loadButtons[i].setBounds(row.removeFromLeft(100).reduced(0, 2));
+    row.removeFromLeft(5);
+    removeButtons[i].setBounds(row.removeFromLeft(80).reduced(0, 2));
+    area.removeFromTop(5);
+  }
+}
+
+//==============================================================================
+SoundFontSettingsPanel::SoundFontSettingsPanel() {
+  addAndMakeVisible(folderLabel);
+  addAndMakeVisible(folderPathEditor);
+  addAndMakeVisible(browseButton);
+
+  folderLabel.setText(u8"โฟลเดอร์ SoundFont :", juce::dontSendNotification);
+  folderPathEditor.setReadOnly(true);
+
+  browseButton.onClick = [this]() {
+    if (onBrowseClicked)
+      onBrowseClicked();
+  };
+}
+
+void SoundFontSettingsPanel::paint(juce::Graphics &g) {
+  g.fillAll(juce::Colours::transparentBlack);
+  g.setColour(juce::Colours::white);
+  g.setFont(18.0f);
+  g.drawText(u8"จัดการ SoundFont", 10, 10, 300, 30,
+             juce::Justification::centredLeft, true);
+}
+
+void SoundFontSettingsPanel::resized() {
+  auto area = getLocalBounds().reduced(20);
+  area.removeFromTop(40);
+
+  auto row = area.removeFromTop(30);
+  folderLabel.setBounds(row.removeFromLeft(150));
+  browseButton.setBounds(row.removeFromRight(40));
+  row.removeFromRight(5);
+  folderPathEditor.setBounds(row);
+}
+
+//==============================================================================
 SettingsComponent::SettingsComponent() {
   addAndMakeVisible(tabs);
 
@@ -93,8 +176,10 @@ SettingsComponent::SettingsComponent() {
               false);
   tabs.addTab(u8"ซาวด์ฟอนท์", juce::Colours::transparentBlack, &sf2Panel, false);
 
-  sf2Panel.addAndMakeVisible(sf2Button);
   sf2Button.setButtonText(u8"เลือก SoundFont");
+  sf2Panel.addAndMakeVisible(sf2Button);
+  sf2Button.setVisible(
+      false); // Hide the old button as we move to folder-based system
 
   generalPanel.addAndMakeVisible(loadBgButton);
   loadBgButton.setButtonText(u8"เลือกภาพพื้นหลัง (Background)");

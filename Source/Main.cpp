@@ -1,8 +1,8 @@
 ﻿#include "BinaryData.h"
 #include "Core/KaraokeEngine.h"
 #include "UI/MainComponent.h"
+#include "UI/SplashComponent.h"
 #include <JuceHeader.h>
-
 
 class PKKaraokeApplication : public juce::JUCEApplication {
 public:
@@ -32,18 +32,43 @@ public:
     audioPlayer.setProcessor(&karaokeEngine);
     audioDeviceManager.addAudioCallback(&audioPlayer);
 
-    mainWindow.reset(new MainWindow(getApplicationName(), &karaokeEngine));
+    splashWindow.reset(new SplashWindow(
+        "Starting PK Karaoke Player...", &karaokeEngine, [this]() {
+          juce::MessageManager::callAsync([this]() {
+            splashWindow = nullptr;
+            mainWindow.reset(
+                new MainWindow(getApplicationName(), &karaokeEngine));
+          });
+        }));
   }
 
   void shutdown() override {
     audioDeviceManager.removeAudioCallback(&audioPlayer);
     audioPlayer.setProcessor(nullptr);
+    splashWindow = nullptr;
     mainWindow = nullptr;
   }
 
   void systemRequestedQuit() override { quit(); }
 
   void anotherInstanceStarted(const juce::String &commandLine) override {}
+
+  class SplashWindow : public juce::DocumentWindow {
+  public:
+    SplashWindow(juce::String name, KaraokeEngine *engine,
+                 std::function<void()> onFinished)
+        : DocumentWindow(name, juce::Colours::black, 0) {
+      setUsingNativeTitleBar(false);
+      setTitleBarHeight(0);
+      setDropShadowEnabled(true);
+      setAlwaysOnTop(true);
+
+      setContentOwned(new SplashComponent(*engine, onFinished), true);
+      centreWithSize(getWidth(), getHeight());
+      setVisible(true);
+    }
+    void closeButtonPressed() override {}
+  };
 
   class MainWindow : public juce::DocumentWindow {
   public:
@@ -91,6 +116,7 @@ private:
   KaraokeEngine karaokeEngine;
   juce::AudioDeviceManager audioDeviceManager;
   juce::AudioProcessorPlayer audioPlayer;
+  std::unique_ptr<SplashWindow> splashWindow;
   std::unique_ptr<MainWindow> mainWindow;
 };
 

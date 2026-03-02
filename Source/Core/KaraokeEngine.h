@@ -7,7 +7,6 @@
 #include "Core/Routing/MixerController.h"
 #include <JuceHeader.h>
 
-
 class KaraokeEngine : public juce::AudioProcessor {
 public:
   KaraokeEngine();
@@ -51,6 +50,7 @@ public:
   // Getters for UI
   MidiPlayer &getMidiPlayer() { return midiPlayer; }
   MixerController &getMixerController() { return mixerController; }
+  AudioGraphManager &getGraphManager() { return graphManager; }
   QueueManager &getQueueManager() { return queueManager; }
   const SongLyrics &getCurrentLyrics() const { return currentLyrics; }
 
@@ -70,4 +70,3 @@ private:
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(KaraokeEngine)
 };
-

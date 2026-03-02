@@ -36,6 +36,45 @@ private:
 };
 
 //==============================================================================
+class VstiSettingsPanel : public juce::Component {
+public:
+  VstiSettingsPanel();
+  ~VstiSettingsPanel() override = default;
+
+  void paint(juce::Graphics &g) override;
+  void resized() override;
+
+  juce::TextButton loadButtons[8];
+  juce::TextButton removeButtons[8];
+  juce::Label nameLabels[8];
+
+  std::function<void(int)> onLoadVstiClicked;
+  std::function<void(int)> onRemoveVstiClicked;
+
+private:
+  JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VstiSettingsPanel)
+};
+
+//==============================================================================
+class SoundFontSettingsPanel : public juce::Component {
+public:
+  SoundFontSettingsPanel();
+  ~SoundFontSettingsPanel() override = default;
+
+  void paint(juce::Graphics &g) override;
+  void resized() override;
+
+  juce::TextEditor folderPathEditor;
+  juce::TextButton browseButton{"..."};
+
+  std::function<void()> onBrowseClicked;
+
+private:
+  juce::Label folderLabel;
+  JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SoundFontSettingsPanel)
+};
+
+//==============================================================================
 class SettingsComponent : public juce::Component {
 public:
   SettingsComponent();
@@ -66,6 +105,8 @@ public:
     setOnLoadNcnClicked(callback);
   }
 
+  SoundFontSettingsPanel sf2Panel;
+
 private:
   juce::TabbedComponent tabs{juce::TabbedButtonBar::TabsAtTop};
 
@@ -74,8 +115,8 @@ private:
   // Future panels
   juce::Component generalPanel;
   juce::Component soundDevicePanel;
-  juce::Component sf2Panel;
-  juce::TextButton sf2Button;
+  juce::TextButton
+      sf2Button; // Keep for backward compat if needed, or remove later
 
   std::function<void()> onLoadNcnClicked;
   std::function<void()> onLoadPkmClicked;

@@ -1,5 +1,8 @@
 ﻿#include "Core/Instruments/SF2Source.h"
 #include "Core/MidiHelper.h"
+#include <JuceHeader.h>
+#include <map>
+#include <optional>
 
 #define TSF_IMPLEMENTATION
 #include "Audio/tsf.h"
@@ -8,10 +11,11 @@ static void LOG_CRASH(const juce::String &msg) {
   juce::File("C:\\temp\\crash.log").appendText(msg + "\n");
 }
 
-SF2Source::SF2Source(MixerController *mixerController)
+SF2Source::SF2Source(MixerController *mixerController,
+                     std::optional<InstrumentGroup> group)
     : AudioProcessor(BusesProperties().withOutput(
           "Output", juce::AudioChannelSet::stereo(), true)),
-      mixer(mixerController) {
+      mixer(mixerController), targetGroup(group) {
   for (int i = 0; i < 16; ++i) {
     channelSynths[i] = nullptr;
     channelPrograms[i] = 0;
@@ -53,6 +57,7 @@ bool SF2Source::loadSoundFont(const juce::File &sf2File) {
   if (sf2File.existsAsFile()) {
     mainSynth = tsf_load_filename(sf2File.getFullPathName().toUTF8());
     if (mainSynth != nullptr) {
+      loadedPath = sf2File.getFullPathName();
       tsf_set_output(mainSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,
                      0.0f);
       for (int i = 0; i < 16; ++i) {
@@ -72,9 +77,11 @@ bool SF2Source::loadSoundFont(const juce::File &sf2File) {
           InstrumentGroup::Conga,       InstrumentGroup::Timbale,
           InstrumentGroup::ThaiChing,   InstrumentGroup::PercussionDrum};
       for (auto group : drumGroups) {
-        drumSynths[group] = tsf_copy(mainSynth);
-        tsf_set_output(drumSynths[group], TSF_STEREO_INTERLEAVED,
-                       (int)currentSampleRate, 0.0f);
+        if (!targetGroup.has_value() || targetGroup.value() == group) {
+          drumSynths[group] = tsf_copy(mainSynth);
+          tsf_set_output(drumSynths[group], TSF_STEREO_INTERLEAVED,
+                         (int)currentSampleRate, 0.0f);
+        }
       }
 
       DBG("SF2Source: Loaded " + sf2File.getFullPathName());
@@ -199,6 +206,8 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
     tsf_render_float(channelSynths[ch], interleaved, numSamples, 0);
 
     InstrumentGroup group = MidiHelper::getInstrumentType(channelPrograms[ch]);
+    if (targetGroup.has_value() && targetGroup.value() != group)
+      continue; // Skip rendering if it's not our target group
 
     float vol = currentVolume;
     float pan = 0.5f;
@@ -311,6 +320,13 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
     group = MidiHelper::getInstrumentDrumType(msg.getNoteNumber());
   }
 
+  // If this synth instance is restricted to a specific group, ignore messages
+  // for other groups However, we still need to process program changes and
+  // control changes for all channels to maintain sync with the MIDI stream, so
+  // we only restrict note on/off.
+  bool shouldPlayNotes =
+      !targetGroup.has_value() || targetGroup.value() == group;
+
   int transpose = 0;
   if (mixer != nullptr && !isDrumChannel[channel]) {
     transpose = mixer->getTrackTranspose(group);
@@ -325,8 +341,8 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
       }
     }
 
-    // Only play if not fully muted
-    if (velocity > 0.001f) {
+    // Only play if not fully muted and matches target group
+    if (velocity > 0.001f && shouldPlayNotes) {
       tsf_channel_note_on(synth, channel,
                           juce::jlimit(0, 127, msg.getNoteNumber() + transpose),
                           juce::jlimit(0.0f, 1.0f, velocity));
@@ -338,8 +354,11 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
         synth = it->second;
       }
     }
-    tsf_channel_note_off(synth, channel,
-                         juce::jlimit(0, 127, msg.getNoteNumber() + transpose));
+    if (shouldPlayNotes) {
+      tsf_channel_note_off(
+          synth, channel,
+          juce::jlimit(0, 127, msg.getNoteNumber() + transpose));
+    }
   } else if (msg.isProgramChange()) {
     const int prog = msg.getProgramChangeNumber();
     channelPrograms[channel] = prog;

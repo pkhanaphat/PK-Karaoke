@@ -54,6 +54,7 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
   // Explicitly set look and feel for member components created before
   // setDefaultLookAndFeel
   settingsComponent.setLookAndFeel(&lookAndFeel);
+  vstiSettingsPanel.setLookAndFeel(&lookAndFeel);
   lyricsView.setLookAndFeel(&lookAndFeel);
   songListView.setLookAndFeel(&lookAndFeel);
   queueComponent.setLookAndFeel(&lookAndFeel);
@@ -128,30 +129,43 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
     }
   });
 
-  settingsComponent.setOnLoadSf2Clicked([this]() {
-    juce::String lastSF2 = loadSetting("lastSF2Path");
+  settingsComponent.sf2Panel.onBrowseClicked = [this]() {
+    juce::String lastSF2Dir = loadSetting("lastSF2Folder");
     juce::File startDir =
-        lastSF2.isNotEmpty()
-            ? juce::File(lastSF2).getParentDirectory()
+        lastSF2Dir.isNotEmpty() && juce::File(lastSF2Dir).isDirectory()
+            ? juce::File(lastSF2Dir)
             : juce::File::getSpecialLocation(juce::File::userHomeDirectory);
 
-    chooser = std::make_unique<juce::FileChooser>("Select SoundFont (.sf2)",
-                                                  startDir, "*.sf2");
+    chooser = std::make_unique<juce::FileChooser>("Select SoundFont Folder",
+                                                  startDir);
 
-    auto chooserFlags = juce::FileBrowserComponent::openMode |
-                        juce::FileBrowserComponent::canSelectFiles;
+    auto chooserFlags = juce::FileBrowserComponent::canSelectDirectories;
 
     chooser->launchAsync(chooserFlags, [this](const juce::FileChooser &fc) {
-      auto file = fc.getResult();
-      if (file.existsAsFile()) {
-        saveSetting("lastSF2Path", file.getFullPathName());
-        juce::MessageManager::callAsync([this, file]() {
-          karaokeEngine.loadSoundFont(file);
-          settingsComponent.setSf2ButtonText(file.getFileName());
-        });
+      auto dir = fc.getResult();
+      if (dir.isDirectory()) {
+        saveSetting("lastSF2Folder", dir.getFullPathName());
+        settingsComponent.sf2Panel.folderPathEditor.setText(
+            dir.getFullPathName(), false);
+
+        // Update MixerController
+        karaokeEngine.getMixerController().setSF2Directory(dir);
+
+        // Refresh Mixer UI if it exists
+        if (mixerWindow != nullptr) {
+          mixerWindow->getMixerComponent().updateAllStrips();
+        }
       }
     });
-  });
+  };
+
+  // Set initial text for SF2 folder
+  juce::String savedSf2Folder = loadSetting("lastSF2Folder");
+  settingsComponent.sf2Panel.folderPathEditor.setText(savedSf2Folder, false);
+  if (savedSf2Folder.isNotEmpty()) {
+    karaokeEngine.getMixerController().setSF2Directory(
+        juce::File(savedSf2Folder));
+  }
 
   settingsComponent.setOnLoadBgClicked([this]() {
     juce::String lastBg = loadSetting("lastBgPath");
@@ -179,6 +193,64 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
       }
     });
   });
+
+  vstiSettingsPanel.onLoadVstiClicked = [this](int slotIndex) {
+    juce::String lastVst = loadSetting("lastVstPath");
+    juce::File startDir =
+        lastVst.isNotEmpty()
+            ? juce::File(lastVst).getParentDirectory()
+            : juce::File::getSpecialLocation(juce::File::userHomeDirectory);
+
+    chooser = std::make_unique<juce::FileChooser>("Select VSTi3 Instrument",
+                                                  startDir, "*.vst3");
+    auto flags = juce::FileBrowserComponent::openMode |
+                 juce::FileBrowserComponent::canSelectFiles;
+
+    chooser->launchAsync(flags, [this, slotIndex](const juce::FileChooser &fc) {
+      auto file = fc.getResult();
+      if (file.existsAsFile()) {
+        saveSetting("lastVstPath", file.getFullPathName());
+        juce::MessageManager::callAsync([this, slotIndex, file]() {
+          if (karaokeEngine.getGraphManager().loadVstiPlugin(
+                  slotIndex, file.getFullPathName())) {
+            vstiSettingsPanel.nameLabels[slotIndex - 1].setText(
+                "Slot " + juce::String(slotIndex) + ": " +
+                    file.getFileNameWithoutExtension(),
+                juce::dontSendNotification);
+            // Save setting for next startup
+            saveSetting("vsti_slot_" + juce::String(slotIndex),
+                        file.getFullPathName());
+          }
+        });
+      }
+    });
+  };
+
+  vstiSettingsPanel.onRemoveVstiClicked = [this](int slotIndex) {
+    karaokeEngine.getGraphManager().removeVstiPlugin(slotIndex);
+    vstiSettingsPanel.nameLabels[slotIndex - 1].setText(
+        "Slot " + juce::String(slotIndex) + ": Not Loaded",
+        juce::dontSendNotification);
+    saveSetting("vsti_slot_" + juce::String(slotIndex), "");
+  };
+
+  // VSTi plugins will be loaded by the Splash Screen before this component is
+  // created. We just need to make sure the UI reflects the loaded state if
+  // needed, but SettingsComponent handles its own labels when opened.
+  {
+    for (int i = 1; i <= 8; ++i) {
+      juce::String savedPath = loadSetting("vsti_slot_" + juce::String(i));
+      if (savedPath.isNotEmpty()) {
+        juce::File vstiFile(savedPath);
+        if (vstiFile.existsAsFile()) {
+          vstiSettingsPanel.nameLabels[i - 1].setText(
+              "Slot " + juce::String(i) + ": " +
+                  vstiFile.getFileNameWithoutExtension(),
+              juce::dontSendNotification);
+        }
+      }
+    }
+  }
 
   juce::Logger::writeToLog("MainComponent: Loading Database");
   juce::String dbPath = loadSetting("lastDbPath");
@@ -229,7 +301,8 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
   bottomBar->onMixerClicked = [this]() {
     if (mixerWindow == nullptr)
       mixerWindow = std::make_unique<SynthMixerWindow>(
-          "Synth Mixer", karaokeEngine.getMixerController());
+          "Synth Mixer", karaokeEngine.getMixerController(),
+          karaokeEngine.getGraphManager());
 
     mixerWindow->setVisible(!mixerWindow->isVisible());
   };
@@ -258,13 +331,12 @@ MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
   juce::Logger::writeToLog("MainComponent: Loading previous paths");
   // ─── โหลด paths ที่บันทึกไว้ก่อนหน้า ───────────────────────────────────────
   {
+    // SoundFont is loaded by Splash Screen. Just update UI.
     juce::String lastSF2 = loadSetting("lastSF2Path");
     if (lastSF2.isNotEmpty()) {
       juce::File sf2File(lastSF2);
       if (sf2File.existsAsFile()) {
-        karaokeEngine.loadSoundFont(sf2File);
         settingsComponent.setSf2ButtonText(sf2File.getFileName());
-        DBG("Auto-loaded SF2: " + lastSF2);
       }
     }
 
@@ -467,11 +539,25 @@ void MainComponent::mouseDown(const juce::MouseEvent &event) {
             juce::DocumentWindow::closeButton);
         settingsWindow->setLookAndFeel(&lookAndFeel);
         settingsWindow->setContentNonOwned(&settingsComponent, true);
-        settingsWindow->centreWithSize(400, 300);
+        settingsWindow->centreWithSize(300, 300);
         settingsWindow->setUsingNativeTitleBar(false);
       }
       settingsWindow->setVisible(true);
       settingsWindow->toFront(true);
+    });
+    menu.addItem("VST Instruments", [this]() {
+      if (vstiSettingsWindow == nullptr) {
+        vstiSettingsWindow = std::make_unique<SettingsWindowContainer>(
+            "VST Instruments",
+            lookAndFeel.findColour(juce::ResizableWindow::backgroundColourId),
+            juce::DocumentWindow::closeButton);
+        vstiSettingsWindow->setLookAndFeel(&lookAndFeel);
+        vstiSettingsWindow->setContentNonOwned(&vstiSettingsPanel, true);
+        vstiSettingsWindow->centreWithSize(450, 420);
+        vstiSettingsWindow->setUsingNativeTitleBar(false);
+      }
+      vstiSettingsWindow->setVisible(true);
+      vstiSettingsWindow->toFront(true);
     });
     menu.addSeparator();
     menu.addItem("Exit", []() {
