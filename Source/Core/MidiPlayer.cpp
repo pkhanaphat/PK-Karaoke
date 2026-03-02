@@ -9,15 +9,28 @@ bool MidiPlayer::loadMidiFile(const juce::File &file) {
   if (stream.openedOk()) {
     juce::MidiFile midiFile;
     if (midiFile.readFrom(stream)) {
+      midiResolution = midiFile.getTimeFormat();
+
+      // 1. First, create the TICK-based sequence BEFORE doing any conversion
+      juce::MidiMessageSequence mergedTicksSequence;
+      for (int i = 0; i < midiFile.getNumTracks(); ++i) {
+        if (auto *track = midiFile.getTrack(i))
+          mergedTicksSequence.addSequence(*track, 0.0);
+      }
+      mergedTicksSequence.updateMatchedPairs();
+      midiSequenceTicks.clear();
+      midiSequenceTicks.addSequence(mergedTicksSequence, 0.0);
+      durationTicks = midiSequenceTicks.getEndTime();
+
+      // 2. NOW convert the original file to seconds
       midiFile.convertTimestampTicksToSeconds();
 
-      // Merge all tracks into a single sequential track
+      // 3. Create the SECONDS-based sequence
       juce::MidiMessageSequence mergedSequence;
       for (int i = 0; i < midiFile.getNumTracks(); ++i) {
         if (auto *track = midiFile.getTrack(i))
           mergedSequence.addSequence(*track, 0.0);
       }
-
       mergedSequence.updateMatchedPairs();
 
       // Re-store the sorted, merged sequence back into our player sequence
@@ -56,6 +69,44 @@ void MidiPlayer::setPosition(double timeInSeconds) {
 }
 
 double MidiPlayer::getPosition() const { return currentPositionSeconds; }
+
+int MidiPlayer::getPositionTicks() const {
+  if (midiSequenceTicks.getNumEvents() == 0 || currentPositionSeconds <= 0.0)
+    return 0;
+
+  double accumulatedTime = 0.0;
+  int currentTick = 0;
+
+  // JUCE's default behavior if no tempo is specified
+  double secondsPerQuarterNote = 0.5; // 120 BPM
+
+  for (int i = 0; i < midiSequenceTicks.getNumEvents(); ++i) {
+    auto *event = midiSequenceTicks.getEventPointer(i);
+    int eventTick = event->message.getTimeStamp();
+
+    // Calculate time passed since last event using the current tempo
+    double ticksDelta = eventTick - currentTick;
+    double timeDelta = (ticksDelta / midiResolution) * secondsPerQuarterNote;
+
+    // If adding this delta exceeds our target time, we interpolate the tick
+    if (accumulatedTime + timeDelta > currentPositionSeconds) {
+      double remainingTime = currentPositionSeconds - accumulatedTime;
+      double remainingTicks =
+          (remainingTime / secondsPerQuarterNote) * midiResolution;
+      return currentTick + static_cast<int>(remainingTicks);
+    }
+
+    currentTick = eventTick;
+    accumulatedTime += timeDelta;
+
+    // Update tempo if this event is a tempo change
+    if (event->message.isTempoMetaEvent()) {
+      secondsPerQuarterNote = event->message.getTempoSecondsPerQuarterNote();
+    }
+  }
+
+  return durationTicks;
+}
 
 double MidiPlayer::getDuration() const { return durationSeconds; }
 
@@ -115,4 +166,3 @@ void MidiPlayer::getNextAudioBlock(juce::MidiBuffer &outputBuffer,
     playing = false; // Finished playback
   }
 }
-

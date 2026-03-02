@@ -1,6 +1,10 @@
 ﻿#include "UI/LyricsView.h"
 
 LyricsView::LyricsView() {
+  // Load background image from binary data
+  backgroundImage = juce::ImageCache::getFromMemory(BinaryData::bg_png,
+                                                    BinaryData::bg_pngSize);
+
   // Use a font that supports Thai characters. Arial usually works on Windows.
   // Or you can specify "Tahoma" or "Leelawadee UI".
   lyricsFont = juce::Font("Tahoma", 32.0f, juce::Font::bold);
@@ -24,18 +28,21 @@ void LyricsView::attachToPlayer(MidiPlayer *player) {
 
 void LyricsView::timerCallback() {
   if (attachedPlayer != nullptr) {
-    double newTime = attachedPlayer->getPosition();
-    if (std::abs(newTime - currentPositionSeconds) >
-        0.01) // Only repaint if changed slightly
-    {
-      currentPositionSeconds = newTime;
+    int newTime = attachedPlayer->getPositionTicks();
+    if (newTime != currentPositionTicks) {
+      currentPositionTicks = newTime;
       repaint();
     }
   }
 }
 
 void LyricsView::paint(juce::Graphics &g) {
-  g.fillAll(juce::Colour(0xff1e1e1e)); // Dark background
+  // 1. Draw Background Image
+  if (backgroundImage.isValid()) {
+    g.drawImage(backgroundImage, getLocalBounds().toFloat());
+  } else {
+    g.fillAll(juce::Colours::black);
+  }
 
   if (currentLyrics.lines.empty()) {
     g.setColour(juce::Colours::grey);
@@ -50,13 +57,40 @@ void LyricsView::paint(juce::Graphics &g) {
   // 1. Find the current absolute character index based on position
   int absoluteCharIndex = 0;
   while (absoluteCharIndex < (int)currentLyrics.cursors.size() &&
-         currentPositionSeconds >= currentLyrics.cursors[absoluteCharIndex]) {
+         currentPositionTicks >= currentLyrics.cursors[absoluteCharIndex]) {
     absoluteCharIndex++;
   }
 
-  // Decrease by 1 to get the 'currently playing' char rather than 'next'
-  if (absoluteCharIndex > 0)
-    absoluteCharIndex--;
+  // Find the current absolutely playing character
+  // If we haven't even reached the first character, absoluteCharIndex remains 0
+  // but we shouldn't sweep it yet.
+  bool hasReachedFirstChar = false;
+  if (!currentLyrics.cursors.empty() &&
+      currentPositionTicks >= currentLyrics.cursors[0]) {
+    hasReachedFirstChar = true;
+    // Decrease by 1 to get the 'currently playing' char rather than 'next'
+    if (absoluteCharIndex > 0)
+      absoluteCharIndex--;
+  } else {
+    absoluteCharIndex = -1; // Haven't started yet
+  }
+
+  // Calculate fractional progress through the current character
+  float charFraction = 0.0f;
+  if (hasReachedFirstChar && absoluteCharIndex >= 0 &&
+      absoluteCharIndex < (int)currentLyrics.cursors.size()) {
+    int startTick = currentLyrics.cursors[absoluteCharIndex];
+    int nextTick = startTick;
+    if (absoluteCharIndex + 1 < (int)currentLyrics.cursors.size()) {
+      nextTick = currentLyrics.cursors[absoluteCharIndex + 1];
+    }
+
+    if (nextTick > startTick && currentPositionTicks >= startTick) {
+      charFraction =
+          (float)(currentPositionTicks - startTick) / (nextTick - startTick);
+      charFraction = juce::jlimit(0.0f, 1.0f, charFraction);
+    }
+  }
 
   // 2. Map absolute character index to Line and Column
   int activeLine = 0;
@@ -65,8 +99,14 @@ void LyricsView::paint(juce::Graphics &g) {
 
   for (int i = 0; i < (int)currentLyrics.lines.size(); ++i) {
     int lineLen = currentLyrics.lines[i].length();
-    if (absoluteCharIndex >= charCounter &&
-        absoluteCharIndex <= charCounter + lineLen) {
+
+    if (absoluteCharIndex == -1) {
+      // We haven't started. Everything is unswept.
+      activeLine = 0;
+      activeCharInLine = -1;
+      break;
+    } else if (absoluteCharIndex >= charCounter &&
+               absoluteCharIndex <= charCounter + lineLen) {
       activeLine = i;
       activeCharInLine = absoluteCharIndex - charCounter;
       break;
@@ -74,19 +114,26 @@ void LyricsView::paint(juce::Graphics &g) {
     charCounter += lineLen + 1; // +1 for the newline
   }
 
-  // 3. Render the current and next lines
-  juce::Rectangle<int> topHalf =
-      getLocalBounds().removeFromTop(getHeight() / 2).reduced(20);
-  juce::Rectangle<int> bottomHalf =
-      getLocalBounds().removeFromBottom(getHeight() / 2).reduced(20);
+  // 3. Render the alternating rolling lines
+  // Match HandyKaraoke exactly but wider gap: Line 1 Y = height - 280, Line 2 Y
+  // = height - 130
+  juce::Rectangle<int> topBounds = getLocalBounds()
+                                       .withSizeKeepingCentre(getWidth(), 80)
+                                       .withY(getHeight() - 280);
+  juce::Rectangle<int> bottomBounds = getLocalBounds()
+                                          .withSizeKeepingCentre(getWidth(), 80)
+                                          .withY(getHeight() - 130);
 
-  // Display two lines at a time
-  int line1 = (activeLine / 2) * 2;
-  int line2 = line1 + 1;
+  // If activeLine is even (0, 2, 4...)
+  // Top row shows activeLine, Bottom row shows activeLine + 1
+  // If activeLine is odd (1, 3, 5...)
+  // Top row shows activeLine + 1, Bottom row shows activeLine
+  int topIndex = (activeLine % 2 == 0) ? activeLine : (activeLine + 1);
+  int bottomIndex = (activeLine % 2 != 0) ? activeLine : (activeLine + 1);
 
   auto drawSweptLine = [&](const juce::String &text,
-                           juce::Rectangle<int> bounds, int sweepPos,
-                           bool isActive) {
+                           juce::Rectangle<int> bounds, int sweepChars,
+                           float fraction, bool isFullySwept) {
     if (text.isEmpty())
       return;
 
@@ -94,12 +141,23 @@ void LyricsView::paint(juce::Graphics &g) {
     g.setColour(juce::Colours::white);
     g.drawText(text, bounds, juce::Justification::centred, true);
 
-    if (isActive && sweepPos > 0) {
+    if (isFullySwept || sweepChars >= 0) {
       int fullWidth = lyricsFont.getStringWidth(text);
-      float ratio = (float)sweepPos / (float)text.length();
-      ratio = juce::jlimit(0.0f, 1.0f, ratio);
 
-      int sweepWidth = (int)(fullWidth * ratio);
+      int sweepWidth = fullWidth;
+      if (!isFullySwept) {
+        juce::String sweptSoFar = text.substring(0, sweepChars);
+        int baseWidth = lyricsFont.getStringWidth(sweptSoFar);
+
+        if (sweepChars < text.length()) {
+          juce::String currentCharStr =
+              text.substring(sweepChars, sweepChars + 1);
+          int charWidth = lyricsFont.getStringWidth(currentCharStr);
+          sweepWidth = baseWidth + (int)(charWidth * fraction);
+        } else {
+          sweepWidth = baseWidth;
+        }
+      }
 
       // Clip to draw the swept part in a different color
       juce::Graphics::ScopedSaveState save(g);
@@ -112,22 +170,25 @@ void LyricsView::paint(juce::Graphics &g) {
     }
   };
 
-  if (line1 < (int)currentLyrics.lines.size())
-    drawSweptLine(currentLyrics.lines[line1], topHalf,
-                  (activeLine == line1) ? activeCharInLine
-                                        : (activeLine > line1 ? 999 : 0),
-                  true);
+  if (topIndex < (int)currentLyrics.lines.size()) {
+    bool isFullySwept = topIndex < activeLine;
+    int sweepAmount = (topIndex == activeLine) ? activeCharInLine : -1;
+    drawSweptLine(currentLyrics.lines[topIndex], topBounds, sweepAmount,
+                  charFraction, isFullySwept);
+  }
 
-  if (line2 < (int)currentLyrics.lines.size())
-    drawSweptLine(currentLyrics.lines[line2], bottomHalf,
-                  (activeLine == line2) ? activeCharInLine
-                                        : (activeLine > line2 ? 999 : 0),
-                  true);
+  if (bottomIndex < (int)currentLyrics.lines.size()) {
+    bool isFullySwept = bottomIndex < activeLine;
+    int sweepAmount = (bottomIndex == activeLine) ? activeCharInLine : -1;
+    drawSweptLine(currentLyrics.lines[bottomIndex], bottomBounds, sweepAmount,
+                  charFraction, isFullySwept);
+  }
 
   // Draw debugging time info
   g.setFont(juce::Font(16.0f));
   g.setColour(juce::Colours::yellow);
-  g.drawText("Time: " + juce::String(currentPositionSeconds, 2) + "s",
+  g.drawText("Tick: " + juce::String(currentPositionTicks) + " | Time: " +
+                 juce::String(attachedPlayer->getPosition(), 2) + "s",
              getLocalBounds().removeFromBottom(30),
              juce::Justification::centred, false);
 }
@@ -137,4 +198,3 @@ void LyricsView::resized() {
   float height = (float)getHeight() / 4.0f;
   lyricsFont.setHeight(juce::jlimit(16.0f, 72.0f, height));
 }
-

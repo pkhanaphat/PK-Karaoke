@@ -107,6 +107,7 @@ juce_add_binary_data(PKKaraokeVST3_BinaryData
     NAMESPACE "BinaryData"
     SOURCES
         Source/Resources/tahoma.ttf
+        Source/Resources/bg.png
 )
 
 # Link against JUCE modules and Binary Data

@@ -2,6 +2,7 @@
 
 #include "Core/MidiPlayer.h"
 #include "Core/NcnParser.h"
+#include <BinaryData.h>
 #include <JuceHeader.h>
 
 
@@ -24,12 +25,12 @@ private:
   MidiPlayer *attachedPlayer = nullptr;
 
   // For timing tracking
-  double currentPositionSeconds = 0.0;
+  int currentPositionTicks = 0;
 
   // UI layout params
   juce::Font lyricsFont;
   int currentCursorIndex = 0; // Where we are in the lyrics.cursors array
+  juce::Image backgroundImage;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LyricsView)
 };
-

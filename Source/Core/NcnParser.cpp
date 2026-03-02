@@ -10,7 +10,7 @@ SongLyrics NcnParser::parse(const juce::File &lyrFile,
     return result;
 
   // 1. Read Cursors (.cur) First
-  std::vector<double> allCursors;
+  std::vector<int> allCursors;
   if (curFile.existsAsFile()) {
     juce::MemoryBlock curData;
     curFile.loadFileAsData(curData);
@@ -22,11 +22,11 @@ SongLyrics NcnParser::parse(const juce::File &lyrFile,
       uint8_t b1 = data[i];
       uint8_t b2 = data[i + 1];
       int val = b1 + (b2 << 8);
-      // HandyKaraoke Formula
+      // HandyKaraoke Formula (Tick based)
+      // The cursor values assume a specific resolution (likely 24 PPQ base).
+      // We must scale it to the actual MIDI file's resolution.
       int tick = val * midiResolution / 24;
-      double seconds =
-          (double)tick / (midiResolution * 2.0); // Assume 120 BPM (2 bps)
-      allCursors.push_back(seconds);
+      allCursors.push_back(tick);
     }
   }
 
@@ -43,7 +43,7 @@ SongLyrics NcnParser::parse(const juce::File &lyrFile,
 
   int linesToSkip = 4; // Skip 4 header lines
 
-  std::vector<double> processedCursors = allCursors;
+  std::vector<int> processedCursors = allCursors;
   int currentCursorIndex = 0;
 
   for (int i = 0; i < rawLines.size(); ++i) {
@@ -107,4 +107,3 @@ juce::String NcnParser::convertTis620ToUtf8(const juce::MemoryBlock &data) {
 
   return result;
 }
-
