@@ -242,7 +242,6 @@ void MixerController::updateSF2List() {
 juce::StringArray MixerController::getAvailableSF2Names() const {
   const juce::ScopedLock sl(lock);
   juce::StringArray names;
-  names.add("SF2 (Default)");
   for (auto &file : availableSf2Files) {
     names.add(file.getFileNameWithoutExtension());
   }

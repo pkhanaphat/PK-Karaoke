@@ -4,7 +4,6 @@
 #include <map>
 #include <vector>
 
-
 // InstrumentGroup เนเธฅเธฐ TrackState
 // เธขเนเธฒเธขเธกเธฒเธญเธขเธนเนเธ—เธตเน
 // Core/Routing
@@ -178,6 +177,10 @@ public:
   void setTrackSF2Path(InstrumentGroup group, const juce::String &path);
   juce::String getTrackSF2Path(InstrumentGroup group) const;
 
+  // Global SF2 (ใช้เมื่อ Track ไม่ได้เลือก SF2 เอง)
+  void setGlobalSF2Path(const juce::String &path) { globalSf2Path = path; }
+  juce::String getGlobalSF2Path() const { return globalSf2Path; }
+
   // SF2 Folder Scanning
   void setSF2Directory(const juce::File &directory);
   juce::File getSF2Directory() const { return sf2Directory; }
@@ -196,6 +199,7 @@ private:
 
   juce::File sf2Directory;
   juce::Array<juce::File> availableSf2Files;
+  juce::String globalSf2Path;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixerController)
 };

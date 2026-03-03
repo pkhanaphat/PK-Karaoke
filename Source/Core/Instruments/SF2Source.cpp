@@ -49,13 +49,18 @@ void SF2Source::freeSynths() {
   LOG_CRASH("freeSynths: End");
 }
 
-bool SF2Source::loadSoundFont(const juce::File &sf2File) {
+bool SF2Source::loadSoundFont(const juce::File &sf2File, tsf *sharedSynth) {
   LOG_CRASH("loadSoundFont: Start");
   const juce::ScopedLock sl(lock);
   freeSynths();
 
   if (sf2File.existsAsFile()) {
-    mainSynth = tsf_load_filename(sf2File.getFullPathName().toUTF8());
+    if (sharedSynth != nullptr) {
+      mainSynth = tsf_copy(sharedSynth);
+    } else {
+      mainSynth = tsf_load_filename(sf2File.getFullPathName().toUTF8());
+    }
+
     if (mainSynth != nullptr) {
       loadedPath = sf2File.getFullPathName();
       tsf_set_output(mainSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,

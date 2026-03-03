@@ -39,7 +39,7 @@ class SettingsWindowContainer : public juce::DocumentWindow {
 public:
   SettingsWindowContainer(const juce::String &name,
                           juce::Colour backgroundColour, int requiredButtons)
-      : DocumentWindow(name, backgroundColour, requiredButtons) {
+      : DocumentWindow(name, backgroundColour, requiredButtons, false) {
 
     // Set window icon
     int logoSize = 0;
@@ -47,11 +47,33 @@ public:
             BinaryData::getNamedResource("Logo_png", logoSize)) {
       setIcon(juce::ImageFileFormat::loadFrom(logoData, (size_t)logoSize));
     }
+
+    // ผูก Window ให้อยู่ภายใต้ MainWindow ตลอดเวลา (เป็น Native Parent)
+    void *mainHwnd = nullptr;
+    for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i) {
+      if (auto *w = juce::TopLevelWindow::getTopLevelWindow(i)) {
+        // ค้นหาหน้าต่างหลักของโปรแกรม
+        if (w->getName() == ProjectInfo::projectName) {
+          mainHwnd = w->getWindowHandle();
+          break;
+        }
+      }
+    }
+
+    if (mainHwnd != nullptr) {
+      addToDesktop(getDesktopWindowStyleFlags(), mainHwnd);
+    } else {
+      addToDesktop(getDesktopWindowStyleFlags());
+    }
+
+    // เมื่อโปรแกรมหลักไม่ได้ตั้ง AlwaysOnTop แล้ว การตั้งค่าให้หน้าต่างย่อยเป็น AlwaysOnTop
+    // จะทำให้มันอยู่เหนือหน้าหลักและไม่โดนบังตอนคลิกหน้าต่างหลักอย่างสมบูรณ์!
+    setAlwaysOnTop(true);
   }
 
   void closeButtonPressed() override {
-    setVisible(false);
     exitModalState(0);
+    setVisible(false);
   }
 };
 
@@ -164,6 +186,13 @@ MainComponent::MainComponent(KaraokeEngine &engine)
         // Update MixerController
         karaokeEngine.getMixerController().setSF2Directory(dir);
 
+        // Refresh Global SF2 ComboBox
+        settingsComponent.sf2Panel.refreshGlobalSf2List(
+            karaokeEngine.getMixerController().getAvailableSF2Names());
+        // Restore selection
+        settingsComponent.sf2Panel.setSelectedGlobalSf2(
+            loadSetting("globalSF2Name"));
+
         // Refresh Mixer UI if it exists
         if (mixerWindow != nullptr) {
           mixerWindow->getMixerComponent().updateAllStrips();
@@ -172,12 +201,42 @@ MainComponent::MainComponent(KaraokeEngine &engine)
     });
   };
 
+  // Wire Global SF2 ComboBox callback
+  settingsComponent.sf2Panel.onGlobalSf2Changed =
+      [this](const juce::String &name) {
+        saveSetting("globalSF2Name", name);
+        juce::String sf2Path = name.isEmpty()
+                                   ? juce::String()
+                                   : karaokeEngine.getMixerController()
+                                         .getSF2FileByName(name)
+                                         .getFullPathName();
+        karaokeEngine.getMixerController().setGlobalSF2Path(sf2Path);
+
+        // Apply immediately to current playback graph
+        if (sf2Path.isNotEmpty()) {
+          karaokeEngine.loadSoundFont(juce::File(sf2Path));
+        }
+      };
+
   // Set initial text for SF2 folder
   juce::String savedSf2Folder = loadSetting("lastSF2Folder");
   settingsComponent.sf2Panel.folderPathEditor.setText(savedSf2Folder, false);
   if (savedSf2Folder.isNotEmpty()) {
     karaokeEngine.getMixerController().setSF2Directory(
         juce::File(savedSf2Folder));
+
+    // Populate Global SF2 ComboBox
+    settingsComponent.sf2Panel.refreshGlobalSf2List(
+        karaokeEngine.getMixerController().getAvailableSF2Names());
+    juce::String savedGlobalSf2 = loadSetting("globalSF2Name");
+    settingsComponent.sf2Panel.setSelectedGlobalSf2(savedGlobalSf2);
+    // Restore global SF2 path into MixerController
+    if (savedGlobalSf2.isNotEmpty()) {
+      karaokeEngine.getMixerController().setGlobalSF2Path(
+          karaokeEngine.getMixerController()
+              .getSF2FileByName(savedGlobalSf2)
+              .getFullPathName());
+    }
   }
 
   settingsComponent.setOnLoadBgClicked([this]() {
@@ -207,37 +266,19 @@ MainComponent::MainComponent(KaraokeEngine &engine)
     });
   });
 
-  vstiSettingsPanel.onLoadVstiClicked = [this](int slotIndex) {
-    juce::String lastVst = loadSetting("lastVstPath");
-    juce::File startDir =
-        lastVst.isNotEmpty()
-            ? juce::File(lastVst).getParentDirectory()
-            : juce::File::getSpecialLocation(juce::File::userHomeDirectory);
-
-    chooser = std::make_unique<juce::FileChooser>("Select VSTi3 Instrument",
-                                                  startDir, "*.vst3");
-    auto flags = juce::FileBrowserComponent::openMode |
-                 juce::FileBrowserComponent::canSelectFiles;
-
-    chooser->launchAsync(flags, [this, slotIndex](const juce::FileChooser &fc) {
-      auto file = fc.getResult();
-      if (file.existsAsFile()) {
-        saveSetting("lastVstPath", file.getFullPathName());
-        juce::MessageManager::callAsync([this, slotIndex, file]() {
-          if (karaokeEngine.getGraphManager().loadVstiPlugin(
-                  slotIndex, file.getFullPathName())) {
+  vstiSettingsPanel.onPluginSelected =
+      [this](int slotIndex, const juce::PluginDescription &desc) {
+        juce::MessageManager::callAsync([this, slotIndex, desc]() {
+          if (karaokeEngine.getGraphManager().loadVstiPlugin(slotIndex, desc)) {
             vstiSettingsPanel.nameLabels[slotIndex - 1].setText(
-                "Slot " + juce::String(slotIndex) + ": " +
-                    file.getFileNameWithoutExtension(),
+                "Slot " + juce::String(slotIndex) + ": " + desc.name,
                 juce::dontSendNotification);
-            // Save setting for next startup
             saveSetting("vsti_slot_" + juce::String(slotIndex),
-                        file.getFullPathName());
+                        desc.fileOrIdentifier);
+            vstiSettingsPanel.updateSlotState(slotIndex, true);
           }
         });
-      }
-    });
-  };
+      };
 
   vstiSettingsPanel.onRemoveVstiClicked = [this](int slotIndex) {
     karaokeEngine.getGraphManager().removeVstiPlugin(slotIndex);
@@ -245,21 +286,29 @@ MainComponent::MainComponent(KaraokeEngine &engine)
         "Slot " + juce::String(slotIndex) + ": Not Loaded",
         juce::dontSendNotification);
     saveSetting("vsti_slot_" + juce::String(slotIndex), "");
+    vstiSettingsPanel.updateSlotState(slotIndex, false);
   };
 
-  // VSTi plugins will be loaded by the Splash Screen before this component is
-  // created. We just need to make sure the UI reflects the loaded state if
-  // needed, but SettingsComponent handles its own labels when opened.
+  vstiSettingsPanel.onOpenVstiClicked = [this](int slotIndex) {
+    // เปิดหน้าต่าง UI ของ VSTi Plugin ที่โหลดอยู่ใน Slot นั้น
+    karaokeEngine.getGraphManager().openVstiPluginEditor(slotIndex);
+  };
+
+  // คืนค่าสถานะปุ่มจาก saved settings
   {
     for (int i = 1; i <= 8; ++i) {
       juce::String savedPath = loadSetting("vsti_slot_" + juce::String(i));
       if (savedPath.isNotEmpty()) {
         juce::File vstiFile(savedPath);
         if (vstiFile.existsAsFile()) {
+          // สั่งให้ AudioGraph โหลด Plugin ใช้งานด้วย
+          karaokeEngine.getGraphManager().loadVstiPlugin(i, savedPath);
+
           vstiSettingsPanel.nameLabels[i - 1].setText(
               "Slot " + juce::String(i) + ": " +
                   vstiFile.getFileNameWithoutExtension(),
               juce::dontSendNotification);
+          vstiSettingsPanel.updateSlotState(i, true);
         }
       }
     }
@@ -562,6 +611,17 @@ void MainComponent::mouseDown(const juce::MouseEvent &event) {
       settingsWindow->toFront(true);
     });
     menu.addItem("VST Instruments", [this]() {
+      // เติมรายการ Plugin จาก KnownPluginList (โหลดจาก XML แล้ว ไม่ต้องแสกนใหม่)
+      auto &host = karaokeEngine.getGraphManager().getPluginHost();
+      juce::Array<juce::PluginDescription> pluginDescs;
+      host.getPluginsFromKnownList(pluginDescs);
+
+      // แปลงและส่งให้ UI
+      juce::OwnedArray<juce::PluginDescription> tempOwned;
+      for (const auto &d : pluginDescs)
+        tempOwned.add(new juce::PluginDescription(d));
+      vstiSettingsPanel.setAvailablePlugins(tempOwned);
+
       if (vstiSettingsWindow == nullptr) {
         vstiSettingsWindow = std::make_unique<SettingsWindowContainer>(
             "VST Instruments",
@@ -573,7 +633,8 @@ void MainComponent::mouseDown(const juce::MouseEvent &event) {
         vstiSettingsWindow->setUsingNativeTitleBar(false);
         vstiSettingsWindow->setResizable(true, true);
       }
-      // Non-modal
+      // Non-modal: ไม่เป็น Modal เพราะถ้าเป็น Modal จะบล็อกการคลิกหน้าต่าง UI ของ
+      // Plugin ย่อย
       vstiSettingsWindow->setVisible(true);
       vstiSettingsWindow->toFront(true);
     });

@@ -78,26 +78,14 @@ void SplashComponent::timerCallback() {
     statusLabel.setText(currentStatus, juce::dontSendNotification);
     progress = 0.2;
   } else if (currentStep == 3) {
-    juce::String sf2Path = loadSetting("lastSF2Path");
+    juce::String sf2Path =
+        karaokeEngine.getMixerController().getGlobalSF2Path();
     if (sf2Path.isNotEmpty() && juce::File(sf2Path).existsAsFile()) {
       karaokeEngine.loadSoundFont(juce::File(sf2Path));
     }
   } else if (currentStep == 4) {
-    // Load per-track custom SoundFonts
-    std::vector<InstrumentGroup> allGroups = {
-        InstrumentGroup::Piano,     InstrumentGroup::Bass,
-        InstrumentGroup::Strings,   InstrumentGroup::Brass,
-        InstrumentGroup::SynthLead, InstrumentGroup::Kick,
-        InstrumentGroup::Snare,     InstrumentGroup::HiHat};
-
-    for (auto group : allGroups) {
-      juce::String customPath =
-          loadSetting("sf2_track_" + juce::String((int)group));
-      if (customPath.isNotEmpty() && juce::File(customPath).existsAsFile()) {
-        karaokeEngine.getGraphManager().setTrackSoundFont(
-            group, juce::File(customPath));
-      }
-    }
+    // We now use a single Global SF2 Node, so we don't need to initialize
+    // individual track sounds nodes here anymore.
   } else if (currentStep >= 5 && currentStep <= 20) {
     int slot = (currentStep - 5) / 2 + 1;   // 1 to 8
     bool isUiStep = (currentStep % 2 == 1); // 5, 7, 9... are UI steps

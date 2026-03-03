@@ -2,11 +2,14 @@
 
 #include "Core/Instruments/SF2Source.h"
 #include "Core/MidiPlayer.h"
+#include "Core/Plugins/PluginHost.h"
 #include "Core/Routing/MixerController.h"
 #include <JuceHeader.h>
 #include <array>
 #include <map>
 #include <memory>
+
+struct tsf;
 
 class AudioGraphManager : public juce::AudioProcessor {
 public:
@@ -43,19 +46,25 @@ public:
   void rebuildGraphRouting();
 
   bool loadVstiPlugin(int slotIndex, const juce::String &pluginPath);
+  bool loadVstiPlugin(int slotIndex, const juce::PluginDescription &desc);
   void removeVstiPlugin(int slotIndex);
+  void openVstiPluginEditor(int slotIndex);
 
   bool loadVstFxPlugin(InstrumentGroup group, int slotIndex,
                        const juce::String &pluginPath);
   void removeVstFxPlugin(InstrumentGroup group, int slotIndex);
 
   void setSoundFont(const juce::File &sf2File);
-  void setTrackSoundFont(InstrumentGroup group, const juce::File &sf2File);
   void resetSynthesizers();
+
+  void clearSharedSoundFonts();
+  tsf *getSharedSoundFont(const juce::String &path);
 
   // Playback
   void getNextAudioBlock(juce::AudioBuffer<float> &buffer, int numSamples,
                          double sampleRate, MidiPlayer &player);
+
+  PluginHost &getPluginHost() { return pluginHost; }
 
 private:
   using Node = juce::AudioProcessorGraph::Node;
@@ -67,16 +76,18 @@ private:
   Node::Ptr audioOutputNode;
   Node::Ptr midiInputNode;
 
-  // Our internal SoundFont Synths (one per active group for independent FX
-  // processing)
+  // Global SoundFont Synth
   juce::File currentSoundFont;
-  std::map<InstrumentGroup, Node::Ptr> synthNodes;
+  Node::Ptr globalSynthNode;
 
   std::map<int, Node::Ptr> vstiNodes;
   std::map<int, Node::Ptr> vstiFilterNodes;
-  std::map<InstrumentGroup, std::array<Node::Ptr, 4>> vstFxNodes;
+  std::map<int, juce::Component::SafePointer<juce::DocumentWindow>> vstiWindows;
+
+  std::map<juce::String, tsf *> sharedSoundFonts;
 
   MixerController &mixerController;
+  PluginHost pluginHost;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioGraphManager)
 };

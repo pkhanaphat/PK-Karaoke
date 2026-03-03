@@ -48,13 +48,8 @@ void LyricsView::paint(juce::Graphics &g) {
     g.fillAll(juce::Colours::black);
   }
 
-  if (currentLyrics.lines.empty()) {
-    g.setColour(juce::Colours::grey);
-    g.setFont(lyricsFont);
-    g.drawText("No Lyrics Loaded", getLocalBounds(),
-               juce::Justification::centred, false);
+  if (currentLyrics.lines.empty())
     return;
-  }
 
   g.setFont(lyricsFont);
 

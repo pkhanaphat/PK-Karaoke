@@ -101,6 +101,10 @@ public:
       // have no title bar
       setDraggable(false);
 
+      // กำหนดให้หน้าจอหลักอยู่เหนือโปรแกรมอื่นๆ ของ OS
+      // (แต่ยังคงอยู่หลังหน้าต่างตั้งค่าเพราะถูกเปิดทีหลัง)
+      // setAlwaysOnTop(true);
+
       setVisible(true);
     }
 

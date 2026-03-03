@@ -17,7 +17,7 @@ public:
 
   //==========================================================================
   // Instrument API
-  bool loadSoundFont(const juce::File &sf2File);
+  bool loadSoundFont(const juce::File &sf2File, tsf *sharedSynth = nullptr);
   bool isLoaded() const { return mainSynth != nullptr; }
   juce::String getLoadedPath() const { return loadedPath; }
   void setSFVolume(float linearGain);

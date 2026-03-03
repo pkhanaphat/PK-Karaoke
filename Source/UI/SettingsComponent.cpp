@@ -225,16 +225,55 @@ VstiSettingsPanel::VstiSettingsPanel() {
     styleLabel(nameLabels[i], FONT_BODY);
     addAndMakeVisible(nameLabels[i]);
 
-    loadButtons[i].setButtonText(u8"โหลด VSTi...");
+    // ปุ่มเลือก VSTi (พร้อมใช้งานเสมอ)
+    loadButtons[i].setButtonText(
+        u8"\u0e40\u0e25\u0e37\u0e2d\u0e01 VSTi  \u25be");
     stylePrimaryButton(loadButtons[i]);
     addAndMakeVisible(loadButtons[i]);
     loadButtons[i].onClick = [this, i]() {
-      if (onLoadVstiClicked)
-        onLoadVstiClicked(i + 1);
+      if (availablePlugins.isEmpty()) {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::InfoIcon,
+            u8"\u0e44\u0e21\u0e48\u0e1e\u0e1a Plugin",
+            u8"\u0e22\u0e31\u0e07\u0e44\u0e21\u0e48\u0e21\u0e35 VST Plugin "
+            u8"\u0e43\u0e19\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23 "
+            u8"\u0e01\u0e23\u0e38\u0e13\u0e32\u0e44\u0e1b\u0e41\u0e2a\u0e01"
+            u8"\u0e19 Plugin \u0e43\u0e19\u0e2b\u0e19\u0e49\u0e32 Settings > "
+            u8"VST Plugins \u0e01\u0e48\u0e2d\u0e19\u0e04\u0e23\u0e31\u0e1a",
+            u8"\u0e15\u0e01\u0e25\u0e07");
+        return;
+      }
+      juce::PopupMenu menu;
+      for (int j = 0; j < availablePlugins.size(); ++j) {
+        const auto &desc = availablePlugins.getReference(j);
+        menu.addItem(j + 1, desc.name + "  (" + desc.version + ")");
+      }
+      auto options = juce::PopupMenu::Options()
+                         .withTargetComponent(&loadButtons[i])
+                         .withMinimumWidth(220);
+      menu.showMenuAsync(options, [this, slotIdx = i + 1](int result) {
+        if (result > 0 && result <= availablePlugins.size()) {
+          const auto &desc = availablePlugins.getReference(result - 1);
+          if (onPluginSelected)
+            onPluginSelected(slotIdx, desc);
+        }
+      });
     };
 
-    removeButtons[i].setButtonText(u8"ลบออก");
+    // ปุ่มเปิด UI ของ VSTi (เปิดใช้งานเปิดขึ้นเมื่อโหลด Plugin แล้ว)
+    openButtons[i].setButtonText(u8"\u0e40\u0e1b\u0e34\u0e14 UI");
+    stylePrimaryButton(openButtons[i]);
+    openButtons[i].setEnabled(false); // Disabled เริ่มต้น
+    addAndMakeVisible(openButtons[i]);
+    openButtons[i].onClick = [this, i]() {
+      if (onOpenVstiClicked)
+        onOpenVstiClicked(i + 1);
+    };
+
+    // ปุ่มลบ Plugin (เปิดใช้งานเมื่อโหลด Plugin แล้ว)
+    removeButtons[i].setButtonText(u8"\u0e25บ");
     styleDangerButton(removeButtons[i]);
+    removeButtons[i].setEnabled(false); // Disabled เริ่มต้น
     addAndMakeVisible(removeButtons[i]);
     removeButtons[i].onClick = [this, i]() {
       if (onRemoveVstiClicked)
@@ -243,11 +282,27 @@ VstiSettingsPanel::VstiSettingsPanel() {
   }
 }
 
+void VstiSettingsPanel::updateSlotState(int slotIndex, bool pluginLoaded) {
+  int i = slotIndex - 1;
+  if (i < 0 || i >= 8)
+    return;
+  openButtons[i].setEnabled(pluginLoaded);
+  removeButtons[i].setEnabled(pluginLoaded);
+}
+
+void VstiSettingsPanel::setAvailablePlugins(
+    const juce::OwnedArray<juce::PluginDescription> &plugins) {
+  availablePlugins.clear();
+  for (const auto *p : plugins)
+    availablePlugins.add(*p);
+}
+
 void VstiSettingsPanel::paint(juce::Graphics &g) {
   g.fillAll(bg);
   auto b = getLocalBounds().reduced(PAD);
-  drawSectionHeader(g, b.removeFromTop(SECTION_H),
-                    u8"จัดการ VSTi (Virtual Instruments)");
+  drawSectionHeader(
+      g, b.removeFromTop(SECTION_H),
+      u8"\u0e08\u0e31\u0e14\u0e01\u0e32\u0e23 VSTi (Virtual Instruments)");
 }
 
 void VstiSettingsPanel::resized() {
@@ -255,16 +310,19 @@ void VstiSettingsPanel::resized() {
   area.removeFromTop(SECTION_H + 10);
 
   const int rowH = 42;
-  const int nameW = 260;
-  const int loadW = 120;
-  const int removeW = 90;
-  const int gap = 8;
+  const int nameW = 180;
+  const int loadW = 150;
+  const int openW = 80;
+  const int removeW = 55;
+  const int gap = 6;
 
   for (int i = 0; i < 8; ++i) {
     auto row = area.removeFromTop(rowH);
     nameLabels[i].setBounds(row.removeFromLeft(nameW));
     row.removeFromLeft(gap);
     loadButtons[i].setBounds(row.removeFromLeft(loadW).reduced(0, 4));
+    row.removeFromLeft(gap);
+    openButtons[i].setBounds(row.removeFromLeft(openW).reduced(0, 4));
     row.removeFromLeft(gap);
     removeButtons[i].setBounds(row.removeFromLeft(removeW).reduced(0, 4));
     area.removeFromTop(6);
@@ -278,11 +336,27 @@ SoundFontSettingsPanel::SoundFontSettingsPanel() {
   addAndMakeVisible(folderLabel);
   addAndMakeVisible(folderPathEditor);
   addAndMakeVisible(browseButton);
+  addAndMakeVisible(globalSf2Label);
+  addAndMakeVisible(globalSf2ComboBox);
 
   folderLabel.setText(u8"โฟลเดอร์ SoundFont :", juce::dontSendNotification);
   folderPathEditor.setReadOnly(true);
 
+  globalSf2Label.setText(u8"Global SF2 (ค่าเริ่มต้น) :",
+                         juce::dontSendNotification);
+  globalSf2ComboBox.setTextWhenNothingSelected(
+      u8"-- ผือเลือก SF2 สำหรับทุก Track --");
+  globalSf2ComboBox.onChange = [this]() {
+    if (onGlobalSf2Changed) {
+      if (globalSf2ComboBox.getSelectedId() > 0)
+        onGlobalSf2Changed(globalSf2ComboBox.getText());
+      else
+        onGlobalSf2Changed("");
+    }
+  };
+
   styleLabel(folderLabel);
+  styleLabel(globalSf2Label);
   styleTextEditor(folderPathEditor);
   styleSecondaryButton(browseButton);
   browseButton.setButtonText(u8"เลือก...");
@@ -304,6 +378,7 @@ void SoundFontSettingsPanel::resized() {
   auto area = getLocalBounds().reduced(PAD);
   area.removeFromTop(SECTION_H + 14);
 
+  // Row 1: SF2 Folder
   auto row = area.removeFromTop(ROW_H);
   folderLabel.setBounds(row.removeFromLeft(180)
                             .withTrimmedBottom((ROW_H - 22) / 2)
@@ -312,10 +387,31 @@ void SoundFontSettingsPanel::resized() {
   browseButton.setBounds(row.removeFromRight(BROWSE_W).reduced(0, 4));
   row.removeFromRight(6);
   folderPathEditor.setBounds(row.reduced(0, 4));
+
+  area.removeFromTop(12);
+
+  // Row 2: Global SF2 ComboBox
+  auto row2 = area.removeFromTop(ROW_H);
+  globalSf2Label.setBounds(row2.removeFromLeft(180)
+                               .withTrimmedBottom((ROW_H - 22) / 2)
+                               .withTrimmedTop((ROW_H - 22) / 2));
+  row2.removeFromLeft(8);
+  globalSf2ComboBox.setBounds(row2.reduced(0, 4));
 }
 
-// ============================================================
-// SettingsComponent
+void SoundFontSettingsPanel::refreshGlobalSf2List(
+    const juce::StringArray &sf2Names) {
+  globalSf2ComboBox.clear(juce::dontSendNotification);
+  globalSf2ComboBox.addItemList(sf2Names, 1);
+}
+
+void SoundFontSettingsPanel::setSelectedGlobalSf2(const juce::String &sf2Name) {
+  if (sf2Name.isEmpty()) {
+    globalSf2ComboBox.setSelectedId(0, juce::dontSendNotification);
+  } else {
+    globalSf2ComboBox.setText(sf2Name, juce::dontSendNotification);
+  }
+}
 // ============================================================
 SettingsComponent::SettingsComponent(PluginHost &host) : vstScannerPanel(host) {
   addAndMakeVisible(tabs);

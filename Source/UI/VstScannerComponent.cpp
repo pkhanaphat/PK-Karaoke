@@ -30,10 +30,15 @@ VstScannerComponent::VstScannerComponent(PluginHost &host)
 }
 
 VstScannerComponent::~VstScannerComponent() {
-  // Ensure any in-progress scan is cancelled before we destroy
+  // หยุด background scanner thread ก่อนเสมอ เพื่อป้องกัน race condition
+  // ที่จะทำให้ thread เข้าไปอ่านหรือเขียน KnownPluginList ขณะที่ UI กำลังถูกทำลาย
   pluginListComp.setVisible(false);
+  // ถอด component ออกก่อนเพื่อหยุด timer/update pendingที่ค้างอยู่
+  removeAllChildren();
 
   appProperties.saveIfNeeded();
+  // บันทึก KnownPluginList ลงไฟล์ XML ของ PluginHost
+  // เพื่อให้โปรแกรมครั้งถัดไปโหลดรายการได้ทันที (ไม่ต้องแสกนซ้ำ)
   pluginHost.savePluginList();
 }
 

@@ -44,14 +44,25 @@ public:
   void paint(juce::Graphics &g) override;
   void resized() override;
 
+  // อัปเดตรายการ Plugin ที่แสกนพบ
+  void
+  setAvailablePlugins(const juce::OwnedArray<juce::PluginDescription> &plugins);
+
+  // Enable/Disable ปุ่มตามสถานะการโหลด Plugin (slotIndex 1-8)
+  void updateSlotState(int slotIndex, bool pluginLoaded);
+
   juce::TextButton loadButtons[8];
+  juce::TextButton openButtons[8]; // เปิดหน้าต่าง UI ของ VSTi
   juce::TextButton removeButtons[8];
   juce::Label nameLabels[8];
 
-  std::function<void(int)> onLoadVstiClicked;
+  std::function<void(int, const juce::PluginDescription &)> onPluginSelected;
   std::function<void(int)> onRemoveVstiClicked;
+  std::function<void(int)> onOpenVstiClicked; // เปิดหน้าต่าง VSTi UI
 
 private:
+  juce::Array<juce::PluginDescription> availablePlugins;
+
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VstiSettingsPanel)
 };
 
@@ -64,13 +75,21 @@ public:
   void paint(juce::Graphics &g) override;
   void resized() override;
 
+  // SF2 Folder path editor
   juce::TextEditor folderPathEditor;
   juce::TextButton browseButton{"..."};
 
+  // Global SF2 ComboBox (เหมือนใน SynthMixer)
+  juce::ComboBox globalSf2ComboBox;
+  void refreshGlobalSf2List(const juce::StringArray &sf2Names);
+  void setSelectedGlobalSf2(const juce::String &sf2Name);
+
   std::function<void()> onBrowseClicked;
+  std::function<void(const juce::String &)> onGlobalSf2Changed; // จาก ComboBox
 
 private:
   juce::Label folderLabel;
+  juce::Label globalSf2Label;
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SoundFontSettingsPanel)
 };
 

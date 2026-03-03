@@ -46,7 +46,8 @@ ChannelStripComponent::ChannelStripComponent(MixerController &mc,
   addAndMakeVisible(soloButton);
 
   sf2ComboBox.setTooltip("Choose custom SoundFont for this track");
-  sf2ComboBox.addItemList(mixerController.getAvailableSF2Names(), 1);
+  sf2ComboBox.addItem("SF2 (Default)", 1);
+  sf2ComboBox.addItemList(mixerController.getAvailableSF2Names(), 2);
   sf2ComboBox.addListener(this);
   addAndMakeVisible(sf2ComboBox);
 
@@ -119,13 +120,20 @@ void ChannelStripComponent::comboBoxChanged(juce::ComboBox *cb) {
     audioGraphManager.rebuildGraphRouting();
   } else if (cb == &sf2ComboBox) {
     if (sf2ComboBox.getSelectedId() == 1) {
-      // Default SF2
-      audioGraphManager.setTrackSoundFont(trackGroup, juce::File());
+      // Default SF2 - in single mode, this usually means reloading global
+      // default
+      juce::String globalPath = mixerController.getGlobalSF2Path();
+      if (globalPath.isNotEmpty()) {
+        audioGraphManager.setSoundFont(juce::File(globalPath));
+      }
     } else {
       juce::String name = sf2ComboBox.getText();
       juce::File sf2File = mixerController.getSF2FileByName(name);
       if (sf2File.existsAsFile()) {
-        audioGraphManager.setTrackSoundFont(trackGroup, sf2File);
+        // In single mode, selecting a SF2 here changes it GLOBALLY
+        audioGraphManager.setSoundFont(sf2File);
+        // Also update the global setting so it persists
+        mixerController.setGlobalSF2Path(sf2File.getFullPathName());
       }
     }
   }
@@ -159,7 +167,8 @@ void ChannelStripComponent::updateStateFromController() {
 
   // Update SF2 ComboBox
   sf2ComboBox.clear(juce::dontSendNotification);
-  sf2ComboBox.addItemList(mixerController.getAvailableSF2Names(), 1);
+  sf2ComboBox.addItem("SF2 (Default)", 1);
+  sf2ComboBox.addItemList(mixerController.getAvailableSF2Names(), 2);
 
   juce::String currentSf2 = mixerController.getTrackSF2Path(trackGroup);
   if (currentSf2.isEmpty()) {
