@@ -74,10 +74,12 @@ private:
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SoundFontSettingsPanel)
 };
 
+#include "UI/VstScannerComponent.h"
+
 //==============================================================================
 class SettingsComponent : public juce::Component {
 public:
-  SettingsComponent();
+  SettingsComponent(PluginHost &host);
   ~SettingsComponent() override;
 
   void paint(juce::Graphics &g) override;
@@ -111,6 +113,7 @@ private:
   juce::TabbedComponent tabs{juce::TabbedButtonBar::TabsAtTop};
 
   DatabaseSettingsPanel dbPanel;
+  VstScannerComponent vstScannerPanel;
 
   // Future panels
   juce::Component generalPanel;

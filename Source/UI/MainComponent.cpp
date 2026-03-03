@@ -39,13 +39,26 @@ class SettingsWindowContainer : public juce::DocumentWindow {
 public:
   SettingsWindowContainer(const juce::String &name,
                           juce::Colour backgroundColour, int requiredButtons)
-      : DocumentWindow(name, backgroundColour, requiredButtons) {}
+      : DocumentWindow(name, backgroundColour, requiredButtons) {
 
-  void closeButtonPressed() override { setVisible(false); }
+    // Set window icon
+    int logoSize = 0;
+    if (const char *logoData =
+            BinaryData::getNamedResource("Logo_png", logoSize)) {
+      setIcon(juce::ImageFileFormat::loadFrom(logoData, (size_t)logoSize));
+    }
+  }
+
+  void closeButtonPressed() override {
+    setVisible(false);
+    exitModalState(0);
+  }
 };
 
 //==============================================================================
-MainComponent::MainComponent(KaraokeEngine &engine) : karaokeEngine(engine) {
+MainComponent::MainComponent(KaraokeEngine &engine)
+    : karaokeEngine(engine),
+      settingsComponent(engine.getGraphManager().getPluginHost()) {
   juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
 
   bottomBar = std::make_unique<BottomBarComponent>();
@@ -539,9 +552,12 @@ void MainComponent::mouseDown(const juce::MouseEvent &event) {
             juce::DocumentWindow::closeButton);
         settingsWindow->setLookAndFeel(&lookAndFeel);
         settingsWindow->setContentNonOwned(&settingsComponent, true);
-        settingsWindow->centreWithSize(300, 300);
+        settingsWindow->centreWithSize(800, 600);
         settingsWindow->setUsingNativeTitleBar(false);
+        settingsWindow->setResizable(true, true);
       }
+      // Non-modal: allows PluginListComponent to show internal dialogs
+      // (scan failure alerts, etc.) without crashing from nested modals
       settingsWindow->setVisible(true);
       settingsWindow->toFront(true);
     });
@@ -553,9 +569,11 @@ void MainComponent::mouseDown(const juce::MouseEvent &event) {
             juce::DocumentWindow::closeButton);
         vstiSettingsWindow->setLookAndFeel(&lookAndFeel);
         vstiSettingsWindow->setContentNonOwned(&vstiSettingsPanel, true);
-        vstiSettingsWindow->centreWithSize(450, 420);
+        vstiSettingsWindow->centreWithSize(600, 500);
         vstiSettingsWindow->setUsingNativeTitleBar(false);
+        vstiSettingsWindow->setResizable(true, true);
       }
+      // Non-modal
       vstiSettingsWindow->setVisible(true);
       vstiSettingsWindow->toFront(true);
     });

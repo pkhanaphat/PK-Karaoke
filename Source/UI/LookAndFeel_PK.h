@@ -54,19 +54,42 @@ public:
   //==========================================================
 
   void drawButtonBackground(juce::Graphics &g, juce::Button &button,
-                            const juce::Colour &, bool isMouseOver,
-                            bool isMouseDown) override {
+                            const juce::Colour &backgroundColour,
+                            bool isMouseOver, bool isMouseDown) override {
     auto bounds = button.getLocalBounds().toFloat().reduced(2);
-
     float r = bounds.getHeight() * 0.5f;
 
-    juce::Colour colour = button.getToggleState() ? accent : bgPanel;
+    // Use the colour registered on the button itself (set via setColour()),
+    // falling back to the global LookAndFeel colours only when not overridden.
+    juce::Colour base = button.findColour(juce::TextButton::buttonColourId);
+    juce::Colour down = button.findColour(juce::TextButton::buttonOnColourId);
 
-    if (isMouseOver)
-      colour = bgHover;
+    // Determine whether the button has a custom colour or uses the global
+    // default
+    bool hasCustomColour =
+        (base != findColour(juce::TextButton::buttonColourId));
 
-    if (isMouseDown)
-      colour = accent;
+    juce::Colour colour;
+    if (button.getToggleState()) {
+      colour = down;
+    } else {
+      colour = base;
+    }
+
+    if (hasCustomColour) {
+      // Custom-coloured buttons: lighten slightly on hover/down for subtle
+      // feedback
+      if (isMouseOver)
+        colour = colour.brighter(0.12f);
+      if (isMouseDown)
+        colour = colour.brighter(0.22f);
+    } else {
+      // Default LookAndFeel_PK behaviour for non-custom buttons
+      if (isMouseOver)
+        colour = bgHover;
+      if (isMouseDown)
+        colour = accent;
+    }
 
     g.setColour(colour);
     g.fillRoundedRectangle(bounds, r);
@@ -134,21 +157,39 @@ public:
                                int height) override {
     g.setColour(bgPanel);
     g.fillRect(0, 0, width, height);
+    // Subtle border
+    g.setColour(bgHover);
+    g.drawRect(0, 0, width, height, 1);
   }
 
   void drawPopupMenuItem(juce::Graphics &g, const juce::Rectangle<int> &area,
-                         bool, bool, bool isHighlighted, bool, bool,
-                         const juce::String &text, const juce::String &,
-                         const juce::Drawable *,
+                         bool isSeparator, bool, bool isHighlighted, bool,
+                         bool isTicked, const juce::String &text,
+                         const juce::String &, const juce::Drawable *,
                          const juce::Colour *) override {
-    auto bg = isHighlighted ? bgHover : bgPanel;
+    if (isSeparator) {
+      g.setColour(bgHover);
+      g.fillRect(area.reduced(8, 0).withHeight(1).withY(area.getCentreY()));
+      return;
+    }
 
-    g.setColour(bg);
-    g.fillRect(area);
+    if (isHighlighted) {
+      g.setColour(accent.withAlpha(0.2f));
+      g.fillRect(area.reduced(4, 2));
+      g.setColour(accent);
+      g.fillRect(area.reduced(4, 2).removeFromLeft(3));
+    }
 
-    g.setColour(textMain);
-
-    g.drawText(text, area.reduced(10, 0), juce::Justification::centredLeft);
+    g.setColour(isHighlighted ? textMain : textDim);
+    g.setFont(juce::Font(14.0f));
+    auto textArea = area.reduced(16, 0);
+    if (isTicked) {
+      g.setColour(accent);
+      g.drawText(juce::String(juce::CharPointer_UTF8("\xe2\x9c\x93")),
+                 textArea.removeFromLeft(20), juce::Justification::centred);
+    }
+    g.setColour(isHighlighted ? textMain : textDim);
+    g.drawText(text, textArea, juce::Justification::centredLeft);
   }
 
   //==========================================================
@@ -156,19 +197,26 @@ public:
   //==========================================================
 
   void drawTabButton(juce::TabBarButton &button, juce::Graphics &g,
-                     bool isMouseOver, bool) override {
+                     bool isMouseOver, bool isMouseDown) override {
     auto area = button.getLocalBounds();
+    bool isFront = button.isFrontTab();
 
-    juce::Colour c = button.isFrontTab() ? accent : bgPanel;
+    juce::Colour c = isFront ? accent : bgPanel;
 
-    if (isMouseOver)
-      c = bgHover;
+    // Only apply hover/down tint on tabs that are NOT already selected.
+    // This prevents the selected (orange) tab from flickering to gray on hover.
+    if (!isFront) {
+      if (isMouseOver)
+        c = bgHover;
+      if (isMouseDown)
+        c = accent.withAlpha(0.7f);
+    }
 
     g.setColour(c);
-
     g.fillRoundedRectangle(area.toFloat().reduced(2), 6);
 
-    g.setColour(textMain);
+    // Text colour: dark on orange (selected) for readability, dim for others
+    g.setColour(isFront ? juce::Colour(0xff1a1000) : textDim);
 
     g.drawText(button.getButtonText(), area, juce::Justification::centred);
   }
