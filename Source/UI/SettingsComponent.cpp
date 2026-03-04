@@ -251,7 +251,7 @@ VstiSettingsPanel::VstiSettingsPanel() {
       auto options = juce::PopupMenu::Options()
                          .withTargetComponent(&loadButtons[i])
                          .withMinimumWidth(220);
-      menu.showMenuAsync(options, [this, slotIdx = i + 1](int result) {
+      menu.showMenuAsync(options, [this, slotIdx = i](int result) {
         if (result > 0 && result <= availablePlugins.size()) {
           const auto &desc = availablePlugins.getReference(result - 1);
           if (onPluginSelected)
@@ -267,7 +267,7 @@ VstiSettingsPanel::VstiSettingsPanel() {
     addAndMakeVisible(openButtons[i]);
     openButtons[i].onClick = [this, i]() {
       if (onOpenVstiClicked)
-        onOpenVstiClicked(i + 1);
+        onOpenVstiClicked(i);
     };
 
     // ปุ่มลบ Plugin (เปิดใช้งานเมื่อโหลด Plugin แล้ว)
@@ -277,17 +277,19 @@ VstiSettingsPanel::VstiSettingsPanel() {
     addAndMakeVisible(removeButtons[i]);
     removeButtons[i].onClick = [this, i]() {
       if (onRemoveVstiClicked)
-        onRemoveVstiClicked(i + 1);
+        onRemoveVstiClicked(i);
     };
   }
 }
 
 void VstiSettingsPanel::updateSlotState(int slotIndex, bool pluginLoaded) {
-  int i = slotIndex - 1;
-  if (i < 0 || i >= 8)
+  if (slotIndex < 0 || slotIndex >= 8)
     return;
-  openButtons[i].setEnabled(pluginLoaded);
-  removeButtons[i].setEnabled(pluginLoaded);
+  loadButtons[slotIndex].setButtonText(
+      pluginLoaded ? u8"\u0e40\u0e1b\u0e25\u0e35\u0e48\u0e22\u0e19 VSTi"
+                   : u8"\u0e40\u0e25\u0e37\u0e2d\u0e01 VSTi  \u25be");
+  openButtons[slotIndex].setEnabled(pluginLoaded);
+  removeButtons[slotIndex].setEnabled(pluginLoaded);
 }
 
 void VstiSettingsPanel::setAvailablePlugins(

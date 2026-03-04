@@ -309,7 +309,7 @@ bool AudioGraphManager::loadVstiPlugin(int slotIndex,
   vstiNodes[slotIndex] = vstiNode;
 
   auto filterNode = mainGraph.addNode(std::make_unique<MidiFilterProcessor>(
-      mixerController, static_cast<OutputDestination>(slotIndex)));
+      mixerController, static_cast<OutputDestination>(slotIndex + 1)));
   vstiFilterNodes[slotIndex] = filterNode;
 
   rebuildGraphRouting();

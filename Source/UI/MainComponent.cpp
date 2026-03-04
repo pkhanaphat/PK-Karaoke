@@ -275,8 +275,8 @@ MainComponent::MainComponent(KaraokeEngine &engine)
       [this](int slotIndex, const juce::PluginDescription &desc) {
         juce::MessageManager::callAsync([this, slotIndex, desc]() {
           if (karaokeEngine.getGraphManager().loadVstiPlugin(slotIndex, desc)) {
-            vstiSettingsPanel.nameLabels[slotIndex - 1].setText(
-                "Slot " + juce::String(slotIndex) + ": " + desc.name,
+            vstiSettingsPanel.nameLabels[slotIndex].setText(
+                "Slot " + juce::String(slotIndex + 1) + ": " + desc.name,
                 juce::dontSendNotification);
             saveSetting("vsti_slot_" + juce::String(slotIndex),
                         desc.fileOrIdentifier);
@@ -290,8 +290,8 @@ MainComponent::MainComponent(KaraokeEngine &engine)
 
   vstiSettingsPanel.onRemoveVstiClicked = [this](int slotIndex) {
     karaokeEngine.getGraphManager().removeVstiPlugin(slotIndex);
-    vstiSettingsPanel.nameLabels[slotIndex - 1].setText(
-        "Slot " + juce::String(slotIndex) + ": Not Loaded",
+    vstiSettingsPanel.nameLabels[slotIndex].setText(
+        "Slot " + juce::String(slotIndex + 1) + ": Not Loaded",
         juce::dontSendNotification);
     saveSetting("vsti_slot_" + juce::String(slotIndex), "");
     vstiSettingsPanel.updateSlotState(slotIndex, false);
@@ -307,16 +307,16 @@ MainComponent::MainComponent(KaraokeEngine &engine)
 
   // คืนค่าสถานะปุ่มจาก saved settings
   {
-    for (int i = 1; i <= 8; ++i) {
-      juce::String savedPath = loadSetting("vsti_slot_" + juce::String(i));
+    for (int i = 0; i < 8; ++i) {
+      juce::String savedPath = loadSetting("vsti_slot_" + juce::String(i + 1));
       if (savedPath.isNotEmpty()) {
         juce::File vstiFile(savedPath);
         if (vstiFile.existsAsFile()) {
           // สั่งให้ AudioGraph โหลด Plugin ใช้งานด้วย
           karaokeEngine.getGraphManager().loadVstiPlugin(i, savedPath);
 
-          vstiSettingsPanel.nameLabels[i - 1].setText(
-              "Slot " + juce::String(i) + ": " +
+          vstiSettingsPanel.nameLabels[i].setText(
+              "Slot " + juce::String(i + 1) + ": " +
                   vstiFile.getFileNameWithoutExtension(),
               juce::dontSendNotification);
           vstiSettingsPanel.updateSlotState(i, true);

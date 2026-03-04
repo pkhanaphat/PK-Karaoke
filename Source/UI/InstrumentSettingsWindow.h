@@ -50,13 +50,15 @@ public:
     combo.addItem(defaultLabel, id++);
 
     // 2. VSTi 1-8 - Only show LOADED VSTi slots
-    for (int i = 1; i <= 8; ++i) {
+    for (int i = 0; i < 8; ++i) {
       juce::String vstiName = agm.getLoadedVstiName(i);
       if (vstiName.isNotEmpty()) {
-        combo.addItem("VSTi " + juce::String(i) + " - " + vstiName, id);
+        combo.addItem("VSTi " + juce::String(i + 1) + " - " + vstiName, i + 2);
       }
-      id++;
     }
+
+    // Resume id for custom SF2 files after the 8 VSTi slots
+    id = 10;
 
     // 3. Custom SF2 files — skip duplicates (e.g. if default SF2 is in the
     // list)

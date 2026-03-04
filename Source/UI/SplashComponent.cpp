@@ -98,7 +98,7 @@ void SplashComponent::timerCallback() {
     } else {
       juce::String vstiPath = loadSetting("vsti_slot_" + juce::String(slot));
       if (vstiPath.isNotEmpty() && juce::File(vstiPath).existsAsFile()) {
-        karaokeEngine.getGraphManager().loadVstiPlugin(slot, vstiPath);
+        karaokeEngine.getGraphManager().loadVstiPlugin(slot - 1, vstiPath);
       }
     }
   } else if (currentStep == 21) {

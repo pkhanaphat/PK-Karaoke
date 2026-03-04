@@ -1183,7 +1183,6 @@ void MixerComponent::updateAllStrips() {
 void MixerComponent::updateStripVisibility() {
   // 1. Determine which OutputDestinations are actively assigned to any track
   std::vector<bool> vstiAssigned(8, false);
-  bool anyDrumVsti = false;
 
   for (auto *strip : trackStrips) {
     if (strip == nullptr)
@@ -1196,11 +1195,6 @@ void MixerComponent::updateStripVisibility() {
       int slotIdx = static_cast<int>(dest) - 1; // VSTi1 is 1, so index 0
       if (slotIdx >= 0 && slotIdx < 8) {
         vstiAssigned[slotIdx] = true;
-      }
-
-      int groupInt = static_cast<int>(group);
-      if (groupInt >= 100 && groupInt <= 115) {
-        anyDrumVsti = true;
       }
     }
   }
@@ -1226,25 +1220,9 @@ void MixerComponent::updateStripVisibility() {
       continue;
 
     auto group = strip->getTrackGroup();
-    int groupInt = static_cast<int>(group);
-
-    // Drum groups (100 - 115) should all be hidden if any drum is routed to
-    // VSTi (Due to the drum-kit nature of drum routing)
-    if (groupInt >= 100 && groupInt <= 115) {
-      if (anyDrumVsti) {
-        strip->setVisible(false);
-      } else {
-        bool isSf2 = (mixerController.getTrackOutputDestination(group) ==
-                      OutputDestination::SF2);
-        strip->setVisible(isSf2);
-      }
-    }
-    // Other instruments and buses
-    else {
-      bool isSf2 = (mixerController.getTrackOutputDestination(group) ==
-                    OutputDestination::SF2);
-      strip->setVisible(isSf2);
-    }
+    bool isSf2 = (mixerController.getTrackOutputDestination(group) ==
+                  OutputDestination::SF2);
+    strip->setVisible(isSf2);
   }
 
   // Trigger content area resize to reflow visible strips
