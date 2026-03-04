@@ -13,6 +13,8 @@ class MixerFaderLAF : public juce::LookAndFeel_V4 {
 public:
   MixerFaderLAF() = default;
 
+  void setFaderColor(juce::Colour c) { faderColor = c; }
+
   // Convert dB value to a slider position (0.0 - 1.0)
   // 0dB -> 0.80, -10dB -> 0.50, -20dB -> 0.30, +6dB -> 1.0, -99dB -> 0.0
   static float dbToNorm(float db) {
@@ -119,10 +121,11 @@ public:
     g.fillRoundedRectangle(thumbX + 1.5f, thumbY + 1.5f, thumbW, thumbH, 2.0f);
 
     // Main thumb body
-    juce::ColourGradient thumbGrad(juce::Colour(0xff999999), thumbX, thumbY,
-                                   juce::Colour(0xff555555), thumbX,
+    juce::Colour baseColor = faderColor;
+    juce::Colour darkColor = baseColor.withMultipliedBrightness(0.55f);
+    juce::ColourGradient thumbGrad(baseColor, thumbX, thumbY, darkColor, thumbX,
                                    thumbY + thumbH, false);
-    thumbGrad.addColour(0.4, juce::Colour(0xffdddddd));
+    thumbGrad.addColour(0.4, baseColor.brighter(0.2f));
     g.setGradientFill(thumbGrad);
     g.fillRoundedRectangle(thumbX, thumbY, thumbW, thumbH, 2.0f);
 
@@ -142,6 +145,7 @@ public:
   }
 
 private:
+  juce::Colour faderColor{0xff999999}; // Default metallic grey
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixerFaderLAF)
 };
 
@@ -171,6 +175,8 @@ public:
 
   void setExpanded(bool expanded);
 
+  InstrumentGroup getTrackGroup() const { return trackGroup; }
+
   LookAndFeel_PK_Mixer mixerLAF;
   MixerFaderLAF faderLAF;
 
@@ -184,8 +190,6 @@ private:
   juce::Slider transposeScale;
   juce::TextButton muteButton;
   juce::TextButton soloButton;
-  juce::ComboBox sf2ComboBox;
-  juce::ComboBox outputSelector;   // Output Routing
   juce::TextButton insertSlots[4]; // Insert FX slots (VST)
   CubaseMeterComponent meter;
   juce::Slider volumeFader;
@@ -243,6 +247,53 @@ private:
 };
 
 //==============================================================================
+// VstiStripComponent - Aggregates audio for a specific VSTi slot (1-8)
+//==============================================================================
+class VstiStripComponent : public juce::Component,
+                           public juce::Slider::Listener,
+                           public juce::Button::Listener,
+                           public juce::Timer {
+public:
+  VstiStripComponent(MixerController &mc, AudioGraphManager &agm, int slot);
+  ~VstiStripComponent() override;
+
+  void paint(juce::Graphics &) override;
+  void paintOverChildren(juce::Graphics &) override;
+  void resized() override;
+  void timerCallback() override;
+  void sliderValueChanged(juce::Slider *) override;
+  void buttonClicked(juce::Button *) override;
+  void setExpanded(bool expanded);
+  void updateStateFromController();
+  void updateNameFromGraph();
+
+  MixerFaderLAF faderLAF;
+  LookAndFeel_PK_Mixer mixerLAF;
+
+private:
+  MixerController &mixerController;
+  AudioGraphManager &audioGraphManager;
+  int slotIndex;
+
+  juce::Label nameLabel;
+  juce::TextButton insertSlots[4];
+  juce::TextButton muteButton;
+  juce::TextButton soloButton;
+  CubaseMeterComponent meter;
+  juce::Slider volumeFader;
+  juce::Slider gainKnob;
+  juce::Slider auxSends[3];
+  bool isExpanded = true;
+
+  juce::Image pluginIcon;
+  juce::Rectangle<int> iconBounds;
+
+  void loadIcon();
+
+  JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VstiStripComponent)
+};
+
+//==============================================================================
 // MasterStripComponent - Final output strip
 //==============================================================================
 class MasterStripComponent : public juce::Component,
@@ -293,6 +344,7 @@ public:
   void resized() override;
   void toggleLayout();
   void updateAllStrips();
+  void updateStripVisibility();
 
 private:
   bool isExpandedLayout = true;
@@ -308,8 +360,6 @@ private:
     juce::Label genreLabel;
     juce::OwnedArray<juce::TextButton> genreButtons;
     juce::TextButton saveButton{"Save"};
-    juce::TextButton sfMapButton{"SoundFont Map"};
-    juce::TextButton vstiSettingsButton{"VSTI Settings"};
     juce::TextButton layoutButton{"Layout"};
   };
 
@@ -329,10 +379,10 @@ private:
     MasterStripComponent &master;
   };
 
+  juce::OwnedArray<VstiStripComponent> vstiStrips;
   juce::OwnedArray<ChannelStripComponent> trackStrips;
   juce::OwnedArray<FXStripComponent> fxStrips;
   MasterStripComponent masterStrip;
-
   ContentComponent content;
   SideDocksComponent sideDocks;
   juce::Viewport viewport;

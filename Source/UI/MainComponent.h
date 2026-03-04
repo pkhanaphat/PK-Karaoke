@@ -5,6 +5,7 @@
 #include "Database/LibraryScanner.h"
 #include "Services/YouTubeService.h"
 #include "UI/BottomBarComponent.h"
+#include "UI/InstrumentSettingsWindow.h"
 #include "UI/LookAndFeel_PK.h"
 #include "UI/LyricsView.h"
 #include "UI/QueueComponent.h"
@@ -13,6 +14,7 @@
 #include "UI/SynthMixerWindow.h"
 #include "UI/YouTubePlayerComponent.h"
 #include <JuceHeader.h>
+
 
 class MainComponent : public juce::Component, private juce::Timer {
 public:
@@ -41,6 +43,7 @@ private:
   SettingsComponent settingsComponent;
   std::unique_ptr<juce::DocumentWindow> vstiSettingsWindow;
   VstiSettingsPanel vstiSettingsPanel;
+  std::unique_ptr<InstrumentSettingsWindow> instrumentSettingsWindow;
   std::unique_ptr<juce::FileChooser> chooser;
 
   LookAndFeel_PK_Modern lookAndFeel;

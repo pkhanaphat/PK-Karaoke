@@ -6,6 +6,7 @@ MixerController::MixerController() {
   initializeTrack(InstrumentGroup::ReverbBus);
   initializeTrack(InstrumentGroup::DelayBus);
   initializeTrack(InstrumentGroup::ChorusBus);
+  initializeTrack(InstrumentGroup::DrumBus);
 }
 
 void MixerController::initializeTrack(InstrumentGroup group) {
@@ -231,7 +232,6 @@ void MixerController::setSF2Directory(const juce::File &directory) {
 }
 
 void MixerController::updateSF2List() {
-  const juce::ScopedLock sl(lock);
   availableSf2Files.clear();
   if (sf2Directory.isDirectory()) {
     availableSf2Files =

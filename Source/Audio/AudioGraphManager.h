@@ -66,6 +66,32 @@ public:
 
   PluginHost &getPluginHost() { return pluginHost; }
 
+  // Returns the display name of the loaded VSTi at slot (1-8), or empty string
+  // if not loaded
+  juce::String getLoadedVstiName(int slotIndex) const {
+    auto it = vstiNodes.find(slotIndex);
+    if (it == vstiNodes.end() || it->second == nullptr)
+      return {};
+    if (auto *proc = it->second->getProcessor())
+      return proc->getName();
+    return {};
+  }
+
+  // Returns true if at least one drum InstrumentGroup (100-115) is assigned
+  // to a VSTi destination (not SF2)
+  bool isDrumVstiAssigned() const {
+    for (int i = 100; i <= 115; ++i) {
+      auto group = static_cast<InstrumentGroup>(i);
+      auto dest = mixerController.getTrackOutputDestination(group);
+      if (dest != OutputDestination::SF2)
+        return true;
+    }
+    return false;
+  }
+
+  void setVstiVolume(int slotIndex, float gain);
+  float getVstiPeak(int slotIndex) const;
+
 private:
   using Node = juce::AudioProcessorGraph::Node;
 
@@ -79,6 +105,10 @@ private:
   // Global SoundFont Synth
   juce::File currentSoundFont;
   Node::Ptr globalSynthNode;
+  Node::Ptr globalFilterNode;
+
+  // VSTi Gain nodes for mixing
+  Node::Ptr vstiGainNodes[8];
 
   std::map<int, Node::Ptr> vstiNodes;
   std::map<int, Node::Ptr> vstiFilterNodes;

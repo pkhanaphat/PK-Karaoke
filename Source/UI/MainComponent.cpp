@@ -211,6 +211,7 @@ MainComponent::MainComponent(KaraokeEngine &engine)
                                          .getSF2FileByName(name)
                                          .getFullPathName();
         karaokeEngine.getMixerController().setGlobalSF2Path(sf2Path);
+        saveSetting("globalSF2Path", sf2Path);
 
         // Apply immediately to current playback graph
         if (sf2Path.isNotEmpty()) {
@@ -230,12 +231,16 @@ MainComponent::MainComponent(KaraokeEngine &engine)
         karaokeEngine.getMixerController().getAvailableSF2Names());
     juce::String savedGlobalSf2 = loadSetting("globalSF2Name");
     settingsComponent.sf2Panel.setSelectedGlobalSf2(savedGlobalSf2);
-    // Restore global SF2 path into MixerController
+
+    // Restore SF2 path into MixerController (for routing info only)
+    // NOTE: The actual SF2 file was already loaded by SplashComponent step 3.
+    // We do NOT call loadSoundFont here to avoid a second slow load.
     if (savedGlobalSf2.isNotEmpty()) {
+      juce::File sf2File =
+          karaokeEngine.getMixerController().getSF2FileByName(savedGlobalSf2);
       karaokeEngine.getMixerController().setGlobalSF2Path(
-          karaokeEngine.getMixerController()
-              .getSF2FileByName(savedGlobalSf2)
-              .getFullPathName());
+          sf2File.getFullPathName());
+      saveSetting("globalSF2Path", sf2File.getFullPathName());
     }
   }
 
@@ -276,6 +281,9 @@ MainComponent::MainComponent(KaraokeEngine &engine)
             saveSetting("vsti_slot_" + juce::String(slotIndex),
                         desc.fileOrIdentifier);
             vstiSettingsPanel.updateSlotState(slotIndex, true);
+
+            if (mixerWindow != nullptr)
+              mixerWindow->getMixerComponent().updateAllStrips();
           }
         });
       };
@@ -287,6 +295,9 @@ MainComponent::MainComponent(KaraokeEngine &engine)
         juce::dontSendNotification);
     saveSetting("vsti_slot_" + juce::String(slotIndex), "");
     vstiSettingsPanel.updateSlotState(slotIndex, false);
+
+    if (mixerWindow != nullptr)
+      mixerWindow->getMixerComponent().updateAllStrips();
   };
 
   vstiSettingsPanel.onOpenVstiClicked = [this](int slotIndex) {
@@ -633,10 +644,29 @@ void MainComponent::mouseDown(const juce::MouseEvent &event) {
         vstiSettingsWindow->setUsingNativeTitleBar(false);
         vstiSettingsWindow->setResizable(true, true);
       }
-      // Non-modal: ไม่เป็น Modal เพราะถ้าเป็น Modal จะบล็อกการคลิกหน้าต่าง UI ของ
-      // Plugin ย่อย
       vstiSettingsWindow->setVisible(true);
       vstiSettingsWindow->toFront(true);
+    });
+    menu.addItem("Instrument Map", [this]() {
+      if (instrumentSettingsWindow == nullptr) {
+        instrumentSettingsWindow = std::make_unique<InstrumentSettingsWindow>(
+            karaokeEngine.getMixerController(),
+            karaokeEngine.getGraphManager());
+        instrumentSettingsWindow->onSettingsChanged = [this]() {
+          if (mixerWindow != nullptr)
+            mixerWindow->getMixerComponent().updateAllStrips();
+        };
+        instrumentSettingsWindow->onRightClickBackground = [this]() {
+          if (mixerWindow == nullptr)
+            mixerWindow = std::make_unique<SynthMixerWindow>(
+                "Synth Mixer", karaokeEngine.getMixerController(),
+                karaokeEngine.getGraphManager());
+          mixerWindow->setVisible(true);
+          mixerWindow->toFront(true);
+        };
+      }
+      instrumentSettingsWindow->setVisible(true);
+      instrumentSettingsWindow->toFront(true);
     });
     menu.addSeparator();
     menu.addItem("Exit", []() {

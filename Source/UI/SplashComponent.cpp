@@ -37,25 +37,27 @@ SplashComponent::SplashComponent(KaraokeEngine &engine,
 
   addAndMakeVisible(progressBar);
 
-  startTimer(50); // Tick every 50ms
+  startTimer(200); // 200ms - same as original working version
 }
 
 SplashComponent::~SplashComponent() { stopTimer(); }
 
 void SplashComponent::paint(juce::Graphics &g) {
-  g.fillAll(juce::Colour(0xff111111)); // Dark background
+  g.fillAll(juce::Colour(0xff111111));
 
   g.setColour(juce::Colours::white);
-  g.setFont(juce::Font(48.0f, juce::Font::bold));
-  g.drawText("PK Karaoke Player", getLocalBounds().withBottom(getHeight() / 2),
+  g.setFont(juce::Font(36.0f, juce::Font::bold));
+  g.drawText("PK Karaoke Player",
+             getLocalBounds().withBottom(getHeight() / 2 + 20),
              juce::Justification::centredBottom, true);
 
   g.setColour(juce::Colours::grey);
   g.setFont(juce::Font(18.0f));
-  g.drawText(
-      "Professional VST Audio Engine",
-      getLocalBounds().withTop(getHeight() / 2 + 10).withBottom(getHeight()),
-      juce::Justification::centredTop, true);
+  g.drawText("Professional VST Audio Engine",
+             getLocalBounds()
+                 .withTop(getHeight() / 2 + 20)
+                 .withBottom(getHeight() - 60),
+             juce::Justification::centredTop, true);
 }
 
 void SplashComponent::resized() {
@@ -64,9 +66,9 @@ void SplashComponent::resized() {
 }
 
 void SplashComponent::timerCallback() {
-  // State machine for splash screen
-  // Even numbers (0, 2, 4...) = update UI
-  // Odd numbers (1, 3, 5...) = do heavy work
+  // Exact original logic restored
+  // Even steps (0,2,4...) = update UI
+  // Odd steps (1,3,5...) = do heavy work
   if (currentStep == 0) {
     currentStatus = "Initializing Core Engine...";
     statusLabel.setText(currentStatus, juce::dontSendNotification);
@@ -78,14 +80,13 @@ void SplashComponent::timerCallback() {
     statusLabel.setText(currentStatus, juce::dontSendNotification);
     progress = 0.2;
   } else if (currentStep == 3) {
-    juce::String sf2Path =
-        karaokeEngine.getMixerController().getGlobalSF2Path();
+    juce::String sf2Path = loadSetting("globalSF2Path");
     if (sf2Path.isNotEmpty() && juce::File(sf2Path).existsAsFile()) {
+      karaokeEngine.getMixerController().setGlobalSF2Path(sf2Path);
       karaokeEngine.loadSoundFont(juce::File(sf2Path));
     }
   } else if (currentStep == 4) {
-    // We now use a single Global SF2 Node, so we don't need to initialize
-    // individual track sounds nodes here anymore.
+    // spare step - reserved
   } else if (currentStep >= 5 && currentStep <= 20) {
     int slot = (currentStep - 5) / 2 + 1;   // 1 to 8
     bool isUiStep = (currentStep % 2 == 1); // 5, 7, 9... are UI steps
@@ -105,7 +106,7 @@ void SplashComponent::timerCallback() {
     statusLabel.setText(currentStatus, juce::dontSendNotification);
     progress = 1.0;
   } else if (currentStep == 22) {
-    // Short delay
+    // Short delay so "Ready!" is visible
   } else if (currentStep == 23) {
     stopTimer();
     if (onFinished) {

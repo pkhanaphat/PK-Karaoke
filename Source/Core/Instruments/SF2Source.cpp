@@ -1,6 +1,7 @@
 ﻿#include "Core/Instruments/SF2Source.h"
 #include "Core/MidiHelper.h"
 #include <JuceHeader.h>
+#include <functional>
 #include <map>
 #include <optional>
 
@@ -61,6 +62,9 @@ bool SF2Source::loadSoundFont(const juce::File &sf2File, tsf *sharedSynth) {
       mainSynth = tsf_load_filename(sf2File.getFullPathName().toUTF8());
     }
 
+    LOG_CRASH("TSF loaded: " +
+              juce::String(mainSynth != nullptr ? "true" : "false"));
+
     if (mainSynth != nullptr) {
       loadedPath = sf2File.getFullPathName();
       tsf_set_output(mainSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,
@@ -99,6 +103,65 @@ bool SF2Source::loadSoundFont(const juce::File &sf2File, tsf *sharedSynth) {
   return false;
 }
 
+void SF2Source::updateCustomSF2Routing(
+    const std::map<InstrumentGroup, juce::String> &customPaths,
+    std::function<tsf *(const juce::String &)> getSharedFontCallback) {
+  LOG_CRASH("updateCustomSF2Routing: called with " +
+            juce::String(customPaths.size()) + " paths");
+  const juce::ScopedLock sl(lock);
+
+  // Clear existing customs
+  for (auto &pair : customSynths) {
+    if (pair.second != nullptr) {
+      tsf_close(pair.second);
+    }
+  }
+  customSynths.clear();
+
+  // Load new customs
+  for (const auto &pair : customPaths) {
+    if (pair.second.isNotEmpty() && juce::File(pair.second).existsAsFile()) {
+      LOG_CRASH("updateCustomSF2Routing: getting shared font for " +
+                pair.second);
+      tsf *shared = getSharedFontCallback(pair.second);
+      if (shared != nullptr) {
+        LOG_CRASH("updateCustomSF2Routing: shared font retrieved, copying...");
+        tsf *custom = tsf_copy(shared);
+        if (custom != nullptr) {
+          tsf_set_output(custom, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,
+                         0.0f);
+          tsf_set_volume(custom, currentVolume);
+
+          // Re-apply channel presets to the new synth so it has the correct
+          // instrument state. Without this, fresh tsf_copy knows no program
+          // change and tsf_channel_note_on plays nothing.
+          for (int ch = 0; ch < 16; ++ch) {
+            tsf_channel_set_presetnumber(custom, ch, channelPrograms[ch],
+                                         (ch == 9));
+          }
+
+          customSynths[pair.first] = custom;
+          LOG_CRASH("SF2Source: Loaded custom route for group " +
+                    juce::String((int)pair.first) + " -> " + pair.second +
+                    " (Shared: " +
+                    juce::String::toHexString((juce::pointer_sized_int)shared) +
+                    ", Custom: " +
+                    juce::String::toHexString((juce::pointer_sized_int)custom) +
+                    ")");
+        } else {
+          LOG_CRASH("updateCustomSF2Routing: failed to copy tsf");
+        }
+      } else {
+        LOG_CRASH(
+            "updateCustomSF2Routing: getSharedFontCallback returned nullptr");
+      }
+    } else {
+      LOG_CRASH("updateCustomSF2Routing: path is empty or does not exist: " +
+                pair.second);
+    }
+  }
+}
+
 void SF2Source::prepareToPlay(double sampleRate, int samplesPerBlock) {
   LOG_CRASH("prepareToPlay: Start");
   const juce::ScopedLock sl(lock);
@@ -120,6 +183,13 @@ void SF2Source::prepareToPlay(double sampleRate, int samplesPerBlock) {
         tsf_set_output(pair.second, TSF_STEREO_INTERLEAVED,
                        (int)currentSampleRate, 0.0f);
       }
+    }
+  }
+
+  for (auto &pair : customSynths) {
+    if (pair.second != nullptr) {
+      tsf_set_output(pair.second, TSF_STEREO_INTERLEAVED,
+                     (int)currentSampleRate, 0.0f);
     }
   }
 }
@@ -208,11 +278,23 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
     if (isDrumChannel[ch] || channelSynths[ch] == nullptr)
       continue;
 
-    tsf_render_float(channelSynths[ch], interleaved, numSamples, 0);
-
     InstrumentGroup group = MidiHelper::getInstrumentType(channelPrograms[ch]);
     if (targetGroup.has_value() && targetGroup.value() != group)
       continue; // Skip rendering if it's not our target group
+
+    tsf *synthToUse = channelSynths[ch];
+    auto customIt = customSynths.find(group);
+    if (customIt != customSynths.end() && customIt->second != nullptr) {
+      synthToUse = customIt->second;
+    }
+
+    if (synthToUse == nullptr) {
+      LOG_CRASH("SF2Source: synthToUse is nullptr for channel " +
+                juce::String(ch));
+      continue;
+    }
+
+    tsf_render_float(synthToUse, interleaved, numSamples, 0);
 
     float vol = currentVolume;
     float pan = 0.5f;
@@ -236,6 +318,7 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
       auto *mixL = dest.getWritePointer(0, startSample);
       auto *mixR = dest.getWritePointer(1, startSample);
 
+      bool hasAudio = false;
       for (int i = 0; i < numSamples; ++i) {
         float sampleL = interleaved[i * 2] * leftGain;
         float sampleR = interleaved[i * 2 + 1] * rightGain;
@@ -247,6 +330,18 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
           peakL = std::abs(sampleL);
         if (std::abs(sampleR) > peakR)
           peakR = std::abs(sampleR);
+
+        if (std::abs(sampleL) > 0.0001f || std::abs(sampleR) > 0.0001f)
+          hasAudio = true;
+      }
+
+      static int audioPulseCount = 0;
+      if (hasAudio) {
+        if (++audioPulseCount % 50 == 0)
+          LOG_CRASH("SF2Source: Rendered AUDIO data for channel " +
+                    juce::String(ch) + " vol: " + juce::String(vol) +
+                    " leftGain: " + juce::String(leftGain) +
+                    " rightGain: " + juce::String(rightGain));
       }
     }
 
@@ -257,11 +352,17 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
   // Render separate Drum buses
   for (auto &pair : drumSynths) {
     auto group = pair.first;
-    auto synth = pair.second;
-    if (synth == nullptr)
+    auto synthToUse = pair.second;
+
+    auto customIt = customSynths.find(group);
+    if (customIt != customSynths.end() && customIt->second != nullptr) {
+      synthToUse = customIt->second;
+    }
+
+    if (synthToUse == nullptr)
       continue;
 
-    tsf_render_float(synth, interleaved, numSamples, 0);
+    tsf_render_float(synthToUse, interleaved, numSamples, 0);
 
     float vol = currentVolume;
     float pan = 0.5f;
@@ -339,7 +440,14 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
 
   if (msg.isNoteOn()) {
     float velocity = msg.getFloatVelocity();
-    if (isDrumChannel[channel]) {
+
+    // Determine which synth instance to use
+    bool usedCustom = false;
+    auto customIt = customSynths.find(group);
+    if (customIt != customSynths.end() && customIt->second != nullptr) {
+      synth = customIt->second;
+      usedCustom = true;
+    } else if (isDrumChannel[channel]) {
       auto it = drumSynths.find(group);
       if (it != drumSynths.end() && it->second != nullptr) {
         synth = it->second;
@@ -348,17 +456,28 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
 
     // Only play if not fully muted and matches target group
     if (velocity > 0.001f && shouldPlayNotes) {
+      static int noteCount = 0;
+      if (++noteCount % 10 == 0)
+        LOG_CRASH("SF2Source: Note ON channel " + juce::String(channel) +
+                  " note " + juce::String(msg.getNoteNumber()) + " vol " +
+                  juce::String(currentVolume));
       tsf_channel_note_on(synth, channel,
                           juce::jlimit(0, 127, msg.getNoteNumber() + transpose),
                           juce::jlimit(0.0f, 1.0f, velocity));
     }
   } else if (msg.isNoteOff()) {
-    if (isDrumChannel[channel]) {
+    bool usedCustom = false;
+    auto customIt = customSynths.find(group);
+    if (customIt != customSynths.end() && customIt->second != nullptr) {
+      synth = customIt->second;
+      usedCustom = true;
+    } else if (isDrumChannel[channel]) {
       auto it = drumSynths.find(group);
       if (it != drumSynths.end() && it->second != nullptr) {
         synth = it->second;
       }
     }
+
     if (shouldPlayNotes) {
       tsf_channel_note_off(
           synth, channel,
@@ -368,10 +487,15 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
     const int prog = msg.getProgramChangeNumber();
     channelPrograms[channel] = prog;
     tsf_channel_set_presetnumber(synth, channel, prog, (channel == 9));
+
     if (isDrumChannel[channel]) {
       for (auto &pair : drumSynths) {
         tsf_channel_set_presetnumber(pair.second, channel, prog, 1);
       }
+    }
+    for (auto &pair : customSynths) {
+      tsf_channel_set_presetnumber(pair.second, channel, prog,
+                                   isDrumChannel[channel] ? 1 : 0);
     }
   } else if (msg.isPitchWheel()) {
     tsf_channel_set_pitchwheel(synth, channel, msg.getPitchWheelValue());
@@ -380,6 +504,10 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
         tsf_channel_set_pitchwheel(pair.second, channel,
                                    msg.getPitchWheelValue());
       }
+    }
+    for (auto &pair : customSynths) {
+      tsf_channel_set_pitchwheel(pair.second, channel,
+                                 msg.getPitchWheelValue());
     }
   } else if (msg.isController()) {
     tsf_channel_midi_control(synth, channel, msg.getControllerNumber(),
@@ -390,6 +518,10 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
                                  msg.getControllerNumber(),
                                  msg.getControllerValue());
       }
+    }
+    for (auto &pair : customSynths) {
+      tsf_channel_midi_control(pair.second, channel, msg.getControllerNumber(),
+                               msg.getControllerValue());
     }
   }
 }

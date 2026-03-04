@@ -41,26 +41,13 @@ ChannelStripComponent::ChannelStripComponent(MixerController &mc,
   muteButton.addListener(this);
   addAndMakeVisible(muteButton);
 
+  soloButton.setButtonText("S");
+  soloButton.setClickingTogglesState(true);
+  soloButton.setColour(juce::TextButton::buttonOnColourId,
+                       juce::Colours::yellow.withAlpha(0.85f));
   soloButton.setColour(juce::TextButton::textColourOnId, juce::Colours::black);
   soloButton.addListener(this);
   addAndMakeVisible(soloButton);
-
-  sf2ComboBox.setTooltip("Choose custom SoundFont for this track");
-  sf2ComboBox.addItem("SF2 (Default)", 1);
-  sf2ComboBox.addItemList(mixerController.getAvailableSF2Names(), 2);
-  sf2ComboBox.addListener(this);
-  addAndMakeVisible(sf2ComboBox);
-
-  // Output Selector
-  outputSelector.addItem("SF2 (Default)", 1);
-  for (int i = 1; i <= 8; ++i) {
-    outputSelector.addItem("VSTi " + juce::String(i), i + 1);
-  }
-  outputSelector.setSelectedId(
-      (int)mixerController.getTrackOutputDestination(trackGroup) + 1,
-      juce::dontSendNotification);
-  outputSelector.addListener(this);
-  addAndMakeVisible(outputSelector);
 
   // 4 Insert FX Slots
   for (int i = 0; i < 4; ++i) {
@@ -113,30 +100,8 @@ ChannelStripComponent::ChannelStripComponent(MixerController &mc,
 
 ChannelStripComponent::~ChannelStripComponent() { stopTimer(); }
 
-void ChannelStripComponent::comboBoxChanged(juce::ComboBox *cb) {
-  if (cb == &outputSelector) {
-    auto dest = static_cast<OutputDestination>(cb->getSelectedId() - 1);
-    mixerController.setTrackOutputDestination(trackGroup, dest);
-    audioGraphManager.rebuildGraphRouting();
-  } else if (cb == &sf2ComboBox) {
-    if (sf2ComboBox.getSelectedId() == 1) {
-      // Default SF2 - in single mode, this usually means reloading global
-      // default
-      juce::String globalPath = mixerController.getGlobalSF2Path();
-      if (globalPath.isNotEmpty()) {
-        audioGraphManager.setSoundFont(juce::File(globalPath));
-      }
-    } else {
-      juce::String name = sf2ComboBox.getText();
-      juce::File sf2File = mixerController.getSF2FileByName(name);
-      if (sf2File.existsAsFile()) {
-        // In single mode, selecting a SF2 here changes it GLOBALLY
-        audioGraphManager.setSoundFont(sf2File);
-        // Also update the global setting so it persists
-        mixerController.setGlobalSF2Path(sf2File.getFullPathName());
-      }
-    }
-  }
+void ChannelStripComponent::comboBoxChanged(juce::ComboBox * /*cb*/) {
+  // SF2 and output routing is handled by InstrumentSettingsWindow
 }
 
 void ChannelStripComponent::timerCallback() {
@@ -165,21 +130,8 @@ void ChannelStripComponent::updateStateFromController() {
     auxSends[i].setValue(mixerController.getTrackAuxSend(trackGroup, i),
                          juce::dontSendNotification);
 
-  // Update SF2 ComboBox
-  sf2ComboBox.clear(juce::dontSendNotification);
-  sf2ComboBox.addItem("SF2 (Default)", 1);
-  sf2ComboBox.addItemList(mixerController.getAvailableSF2Names(), 2);
-
-  juce::String currentSf2 = mixerController.getTrackSF2Path(trackGroup);
-  if (currentSf2.isEmpty()) {
-    sf2ComboBox.setSelectedId(1, juce::dontSendNotification); // Default
-  } else {
-    juce::File f(currentSf2);
-    sf2ComboBox.setText(f.getFileNameWithoutExtension(),
-                        juce::dontSendNotification);
-  }
-
   for (int i = 0; i < 4; ++i) {
+
     auto path = mixerController.getVstPluginPath(trackGroup, i);
     if (path.isNotEmpty()) {
       bool bypass = mixerController.getVstPluginBypass(trackGroup, i);
@@ -324,7 +276,7 @@ void ChannelStripComponent::loadIcon() {
     iconName = "Violins.png";
     break;
   case InstrumentGroup::Ensemble:
-    iconName = "Violins.png";
+    iconName = "Ensemble.png";
     break;
   case InstrumentGroup::Brass:
     iconName = "Trombone.png";
@@ -450,11 +402,7 @@ void ChannelStripComponent::paint(juce::Graphics &g) {
     g.setColour(juce::Colour(140, 140, 150));
     g.drawText("GAIN", 0, 4, getWidth(), 10, juce::Justification::centred);
 
-    // Send labels (R1 R2 R3)
-    g.setFont(juce::Font(7.5f));
-    g.setColour(juce::Colour(100, 100, 115));
-    g.drawText("INSERTS", 0, 84, getWidth(), 9, juce::Justification::centred);
-
+    // INSERTS label removed as requested
     const int scrollbarPadding = 22;
     const int footerTotalH = 96 + scrollbarPadding;
     const int sendY = getHeight() - footerTotalH;
@@ -477,19 +425,15 @@ void ChannelStripComponent::resized() {
     y += 12; // top padding + label
     gainKnob.setBounds(W / 2 - 16, y, 32, 32);
     y += 36;
-    outputSelector.setBounds(4, y, W - 8, 18);
-    y += 22;
   } else {
     y += 8;
   }
 
   y += 4;
   const int btnW = 22, btnH = 20;
-  const int btnX = (W - btnW * 3 - 8) / 2;
+  const int btnX = (W - btnW * 2 - 4) / 2;
   muteButton.setBounds(btnX, y, btnW, btnH);
   soloButton.setBounds(btnX + btnW + 4, y, btnW, btnH);
-  sf2ComboBox.setBounds(btnX + (btnW + 4) * 2, y, btnW + 20,
-                        btnH); // Slightly wider for combo
   y += btnH + 4;
 
   if (isExpanded) {
@@ -564,10 +508,19 @@ FXStripComponent::FXStripComponent(MixerController &mc, AudioGraphManager &agm,
   nameLabel.setColour(juce::Label::textColourId, juce::Colour(220, 220, 220));
   addAndMakeVisible(nameLabel);
 
+  auto dbRange = juce::NormalisableRange<double>(
+      -99.0, 6.0,
+      [](double, double, double p) {
+        return (double)MixerFaderLAF::normToDb((float)p);
+      },
+      [](double, double, double v) {
+        return (double)MixerFaderLAF::dbToNorm((float)v);
+      });
+  returnVolumeFader.setNormalisableRange(dbRange);
   returnVolumeFader.setSliderStyle(juce::Slider::LinearVertical);
-  returnVolumeFader.setRange(-60.0, 6.0, 0.1);
   returnVolumeFader.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
   returnVolumeFader.setLookAndFeel(&faderLAF);
+  returnVolumeFader.setValue(0.0, juce::dontSendNotification);
   returnVolumeFader.addListener(this);
   addAndMakeVisible(returnVolumeFader);
 
@@ -850,6 +803,274 @@ void MasterStripComponent::loadIcon() {
 }
 
 //==============================================================================
+// VstiStripComponent
+//==============================================================================
+
+VstiStripComponent::VstiStripComponent(MixerController &mc,
+                                       AudioGraphManager &agm, int slot)
+    : mixerController(mc), audioGraphManager(agm), slotIndex(slot) {
+  addAndMakeVisible(meter);
+
+  for (int i = 0; i < 4; ++i) {
+    insertSlots[i].setButtonText("+");
+    insertSlots[i].setTooltip("Insert VSTi FX " + juce::String(i + 1));
+    addAndMakeVisible(insertSlots[i]);
+  }
+
+  for (int i = 0; i < 3; ++i) {
+    auxSends[i].setSliderStyle(juce::Slider::RotaryVerticalDrag);
+    auxSends[i].setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    auxSends[i].setRange(0.0, 1.0, 0.01);
+    auxSends[i].setValue(0.0, juce::dontSendNotification);
+    addAndMakeVisible(auxSends[i]);
+  }
+
+  nameLabel.setText(juce::String("VST ") + juce::String(slotIndex + 1),
+                    juce::dontSendNotification);
+  nameLabel.setJustificationType(juce::Justification::centred);
+  nameLabel.setFont(juce::Font(10.0f, juce::Font::bold));
+  nameLabel.setColour(juce::Label::textColourId, juce::Colour(220, 220, 220));
+  addAndMakeVisible(nameLabel);
+
+  auto dbRange = juce::NormalisableRange<double>(
+      -99.0, 6.0,
+      [](double, double, double p) {
+        return (double)MixerFaderLAF::normToDb((float)p);
+      },
+      [](double, double, double v) {
+        return (double)MixerFaderLAF::dbToNorm((float)v);
+      });
+  volumeFader.setNormalisableRange(dbRange);
+  volumeFader.setSliderStyle(juce::Slider::LinearVertical);
+  volumeFader.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+
+  // Set the Fader Color to Orange, distinguishing it from SF2 (Blue) and FX
+  // (Purple)
+  faderLAF.setFaderColor(juce::Colour(0xffe67e22));
+  volumeFader.setLookAndFeel(&faderLAF);
+
+  volumeFader.setValue(0.0, juce::dontSendNotification); // Default 0dB
+  volumeFader.addListener(this);
+  addAndMakeVisible(volumeFader);
+
+  muteButton.setButtonText("M");
+  muteButton.setColour(juce::TextButton::buttonOnColourId,
+                       juce::Colours::red.withAlpha(0.6f));
+  muteButton.setClickingTogglesState(true);
+  muteButton.addListener(this);
+  addAndMakeVisible(muteButton);
+
+  soloButton.setButtonText("S");
+  soloButton.setColour(juce::TextButton::buttonOnColourId,
+                       juce::Colours::yellow.withAlpha(0.6f));
+  soloButton.setColour(juce::TextButton::textColourOnId, juce::Colours::black);
+  soloButton.setClickingTogglesState(true);
+  soloButton.addListener(this);
+  addAndMakeVisible(soloButton);
+
+  gainKnob.setSliderStyle(juce::Slider::RotaryVerticalDrag);
+  gainKnob.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+  gainKnob.setRange(0.0, 2.0, 0.01);
+  gainKnob.setValue(1.0, juce::dontSendNotification);
+  gainKnob.addListener(this);
+  addAndMakeVisible(gainKnob);
+
+  loadIcon();
+
+  setLookAndFeel(&mixerLAF);
+  startTimerHz(60);
+}
+
+VstiStripComponent::~VstiStripComponent() {
+  stopTimer();
+  muteButton.removeListener(this);
+  soloButton.removeListener(this);
+  gainKnob.removeListener(this);
+  volumeFader.removeListener(this);
+  volumeFader.setLookAndFeel(nullptr);
+  setLookAndFeel(nullptr);
+}
+
+void VstiStripComponent::loadIcon() {
+  juce::File folder =
+      juce::File::getSpecialLocation(juce::File::currentExecutableFile)
+          .getParentDirectory();
+  for (int i = 0; i < 6; ++i) {
+    auto f = folder.getChildFile("Instruments").getChildFile("VST_Logo.png");
+    if (f.existsAsFile()) {
+      pluginIcon = juce::ImageCache::getFromFile(f);
+      return;
+    }
+    folder = folder.getParentDirectory();
+  }
+}
+
+void VstiStripComponent::paintOverChildren(juce::Graphics &g) {
+  if (pluginIcon.isValid()) {
+    g.drawImageWithin(pluginIcon, iconBounds.getX(), iconBounds.getY(),
+                      iconBounds.getWidth(), iconBounds.getHeight(),
+                      juce::RectanglePlacement::centred |
+                          juce::RectanglePlacement::onlyReduceInSize);
+  }
+}
+
+void VstiStripComponent::timerCallback() {
+  meter.setLevel(audioGraphManager.getVstiPeak(slotIndex));
+  meter.decayPeak();
+}
+
+void VstiStripComponent::sliderValueChanged(juce::Slider *s) {
+  auto vstiGroup = static_cast<InstrumentGroup>(
+      static_cast<int>(InstrumentGroup::VSTi1) + slotIndex);
+
+  if (s == &volumeFader) {
+    audioGraphManager.setVstiVolume(
+        slotIndex,
+        juce::Decibels::decibelsToGain((float)volumeFader.getValue()));
+  } else if (s == &gainKnob) {
+    mixerController.setTrackGain(vstiGroup, (float)gainKnob.getValue());
+  }
+}
+
+void VstiStripComponent::buttonClicked(juce::Button *b) {
+  auto vstiGroup = static_cast<InstrumentGroup>(
+      static_cast<int>(InstrumentGroup::VSTi1) + slotIndex);
+
+  if (b == &muteButton) {
+    mixerController.setTrackMute(vstiGroup, muteButton.getToggleState());
+  } else if (b == &soloButton) {
+    mixerController.setTrackSolo(vstiGroup, soloButton.getToggleState());
+  }
+
+  // refresh all strips
+  if (auto *mixer = findParentComponentOfClass<MixerComponent>())
+    mixer->updateAllStrips();
+}
+
+void VstiStripComponent::setExpanded(bool expanded) {
+  isExpanded = expanded;
+  gainKnob.setVisible(expanded);
+  for (int i = 0; i < 4; ++i)
+    insertSlots[i].setVisible(expanded);
+  for (int i = 0; i < 3; ++i)
+    auxSends[i].setVisible(expanded);
+  resized();
+  repaint();
+}
+
+void VstiStripComponent::updateStateFromController() {
+  auto vstiGroup = static_cast<InstrumentGroup>(
+      static_cast<int>(InstrumentGroup::VSTi1) + slotIndex);
+
+  muteButton.setToggleState(mixerController.isEffectivelyMuted(vstiGroup),
+                            juce::dontSendNotification);
+  soloButton.setToggleState(mixerController.isTrackSolo(vstiGroup),
+                            juce::dontSendNotification);
+  gainKnob.setValue(mixerController.getTrackGain(vstiGroup),
+                    juce::dontSendNotification);
+}
+
+void VstiStripComponent::updateNameFromGraph() {
+  juce::String pluginName = audioGraphManager.getLoadedVstiName(slotIndex);
+  if (pluginName.isEmpty()) {
+    nameLabel.setText(juce::String("VST ") + juce::String(slotIndex + 1),
+                      juce::dontSendNotification);
+  } else {
+    // Truncate name if it's too long
+    if (pluginName.length() > 10) {
+      pluginName = pluginName.substring(0, 9) + ".";
+    }
+    nameLabel.setText(pluginName, juce::dontSendNotification);
+  }
+}
+
+void VstiStripComponent::paint(juce::Graphics &g) {
+  auto r = getLocalBounds();
+
+  juce::ColourGradient bg(juce::Colour(48, 40, 36), 0.0f, 0.0f,
+                          juce::Colour(26, 22, 20), 0.0f, (float)r.getHeight(),
+                          false);
+  g.setGradientFill(bg);
+  g.fillRect(r);
+
+  g.setColour(juce::Colour(60, 50, 46));
+  g.fillRect(r.getRight() - 1, r.getY(), 1, r.getHeight());
+
+  if (isExpanded) {
+    const int scrollbarPadding = 22;
+    const int footerTotalH = 96 + scrollbarPadding;
+    const int sendY = getHeight() - footerTotalH;
+    const int sendW = getWidth() / 3;
+    const char *sendLabels[] = {"FX1", "FX2", "FX3"};
+    g.setFont(juce::Font(7.5f));
+    g.setColour(juce::Colour(100, 140, 200));
+    for (int i = 0; i < 3; ++i)
+      g.drawText(sendLabels[i], i * sendW, sendY - 10, sendW, 10,
+                 juce::Justification::centred);
+  }
+}
+
+void VstiStripComponent::resized() {
+  const int W = getWidth();
+  const int H = getHeight();
+  int y = 0;
+
+  if (isExpanded) {
+    y += 12; // top padding + label
+    gainKnob.setBounds(W / 2 - 16, y, 32, 32);
+    y += 36;
+  } else {
+    y += 8;
+  }
+
+  y += 4;
+  const int btnW = 22, btnH = 20;
+  const int btnX = (W - btnW * 2 - 4) / 2;
+  muteButton.setBounds(btnX, y, btnW, btnH);
+  soloButton.setBounds(btnX + btnW + 4, y, btnW, btnH);
+  y += btnH + 4;
+
+  if (isExpanded) {
+    const int slotH = 16;
+    const int slotPad = 2;
+    for (int i = 0; i < 4; ++i) {
+      insertSlots[i].setBounds(4, y, W - 8, slotH);
+      y += slotH + slotPad;
+    }
+    y += 2;
+  }
+
+  const int scrollbarPadding = 22;
+  const int labelH = 20;
+  const int iconH = 36;
+  const int footerH = iconH + labelH + scrollbarPadding;
+  int sendsH = isExpanded ? 44 : 0;
+  int faderH = H - y - footerH - sendsH - 10;
+
+  auto area = juce::Rectangle<int>(4, y, W - 8, faderH);
+  const int meterW = 24;
+  meter.setBounds(area.removeFromRight(meterW).reduced(0, 4));
+  area.removeFromRight(4);
+  volumeFader.setBounds(area);
+
+  y += faderH + 10;
+
+  if (isExpanded) {
+    const int sendSz = 24;
+    const int sendSpacing = (W - sendSz * 3) / 4;
+    for (int i = 0; i < 3; ++i)
+      auxSends[i].setBounds(sendSpacing + i * (sendSz + sendSpacing), y, sendSz,
+                            sendSz);
+    y += 36 + 4;
+  }
+
+  if (pluginIcon.isValid()) {
+    iconBounds = {0, y, W, iconH};
+  }
+  nameLabel.setBounds(0, y + iconH, W, labelH);
+}
+
+//==============================================================================
 // MixerComponent
 //==============================================================================
 
@@ -871,6 +1092,13 @@ MixerComponent::MixerComponent(MixerController &mc, AudioGraphManager &agm)
     : mixerController(mc), audioGraphManager(agm), masterStrip(mc, agm),
       content(trackStrips), sideDocks(fxStrips, masterStrip) {
   addAndMakeVisible(header);
+
+  // --- VSTi 1-8 Output Strips ---
+  for (int i = 0; i < 8; ++i) {
+    auto *strip = vstiStrips.add(
+        new VstiStripComponent(mixerController, audioGraphManager, i));
+    content.addAndMakeVisible(strip);
+  }
 
   // --- Melodic Instruments (0 - 27) ---
   for (int i = 0; i <= 27; ++i) {
@@ -921,6 +1149,9 @@ MixerComponent::MixerComponent(MixerController &mc, AudioGraphManager &agm)
   viewport.setLookAndFeel(&getLookAndFeel());
   addAndMakeVisible(viewport);
   addAndMakeVisible(sideDocks);
+
+  // Initialize visibility state based on graph routing
+  updateStripVisibility();
 }
 
 MixerComponent::~MixerComponent() {}
@@ -939,15 +1170,86 @@ void MixerComponent::resized() {
   sideDocks.setBounds(area.removeFromRight(sideW));
   viewport.setBounds(area);
 
-  content.setSize((int)trackStrips.size() * stripW, area.getHeight());
+  content.setSize(((int)trackStrips.size() + (int)vstiStrips.size()) * stripW,
+                  area.getHeight());
 }
 
 void MixerComponent::updateAllStrips() {
   for (auto *strip : trackStrips)
     strip->updateStateFromController();
+  updateStripVisibility();
+}
 
-  // FX strips don't show M/S buttons in this UI usually, but for consistency:
-  // (FX strips were previously not updated, but we could add if needed)
+void MixerComponent::updateStripVisibility() {
+  // 1. Determine which OutputDestinations are actively assigned to any track
+  std::vector<bool> vstiAssigned(8, false);
+  bool anyDrumVsti = false;
+
+  for (auto *strip : trackStrips) {
+    if (strip == nullptr)
+      continue;
+
+    auto group = strip->getTrackGroup();
+    auto dest = mixerController.getTrackOutputDestination(group);
+
+    if (dest != OutputDestination::SF2) {
+      int slotIdx = static_cast<int>(dest) - 1; // VSTi1 is 1, so index 0
+      if (slotIdx >= 0 && slotIdx < 8) {
+        vstiAssigned[slotIdx] = true;
+      }
+
+      int groupInt = static_cast<int>(group);
+      if (groupInt >= 100 && groupInt <= 115) {
+        anyDrumVsti = true;
+      }
+    }
+  }
+
+  // 1. Show or Hide VSTi 1-8 Strips
+  for (int i = 0; i < 8; ++i) {
+    if (auto *strip = vstiStrips[i]) {
+      // Strip is visible only if a plugin is loaded AND at least one track is
+      // routed to it
+      bool hasPlugin = audioGraphManager.getLoadedVstiName(i).isNotEmpty();
+      bool isUsed = vstiAssigned[i];
+
+      strip->setVisible(hasPlugin && isUsed);
+      if (hasPlugin && isUsed) {
+        strip->updateNameFromGraph();
+      }
+    }
+  }
+
+  // 2. Hide ChannelStripComponents if they are routed to VSTi
+  for (auto *strip : trackStrips) {
+    if (strip == nullptr)
+      continue;
+
+    auto group = strip->getTrackGroup();
+    int groupInt = static_cast<int>(group);
+
+    // Drum groups (100 - 115) should all be hidden if any drum is routed to
+    // VSTi (Due to the drum-kit nature of drum routing)
+    if (groupInt >= 100 && groupInt <= 115) {
+      if (anyDrumVsti) {
+        strip->setVisible(false);
+      } else {
+        bool isSf2 = (mixerController.getTrackOutputDestination(group) ==
+                      OutputDestination::SF2);
+        strip->setVisible(isSf2);
+      }
+    }
+    // Other instruments and buses
+    else {
+      bool isSf2 = (mixerController.getTrackOutputDestination(group) ==
+                    OutputDestination::SF2);
+      strip->setVisible(isSf2);
+    }
+  }
+
+  // Trigger content area resize to reflow visible strips
+  content.resized();
+  resized();
 }
 
 //--
@@ -958,8 +1260,9 @@ MixerComponent::ContentComponent::ContentComponent(
 
 void MixerComponent::ContentComponent::resized() {
   auto area = getLocalBounds();
-  for (auto *strip : trackStrips) {
-    strip->setBounds(area.removeFromLeft(76));
+  for (auto *c : getChildren()) {
+    if (c->isVisible())
+      c->setBounds(area.removeFromLeft(76));
   }
 }
 
@@ -992,8 +1295,7 @@ MixerComponent::HeaderComponent::HeaderComponent() {
   genreLabel.setColour(juce::Label::textColourId, juce::Colours::white);
   addAndMakeVisible(genreLabel);
 
-  for (auto *btn :
-       {&saveButton, &sfMapButton, &vstiSettingsButton, &layoutButton})
+  for (auto *btn : {&saveButton, &layoutButton})
     addAndMakeVisible(btn);
 }
 
@@ -1012,10 +1314,6 @@ void MixerComponent::HeaderComponent::resized() {
   area.removeFromLeft(10);
 
   layoutButton.setBounds(area.removeFromRight(72));
-  area.removeFromRight(6);
-  vstiSettingsButton.setBounds(area.removeFromRight(96));
-  area.removeFromRight(6);
-  sfMapButton.setBounds(area.removeFromRight(106));
   area.removeFromRight(6);
   saveButton.setBounds(area.removeFromRight(64));
 }

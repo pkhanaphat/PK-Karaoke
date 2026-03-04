@@ -71,7 +71,17 @@ void BottomBarComponent::paint(juce::Graphics &g) {
   g.setColour(juce::Colour(0xff333333).withAlpha(0.95f)); // Match bgSecondary
   g.fillRect(getLocalBounds().toFloat());
 
-  // Removed outline
+  // Draw small Logo on the left
+  int logoSize = 0;
+  if (const char *logoData =
+          BinaryData::getNamedResource("Logo_png", logoSize)) {
+    juce::Image logo =
+        juce::ImageFileFormat::loadFrom(logoData, (size_t)logoSize);
+    if (logo.isValid()) {
+      g.drawImageWithin(logo, 10, 5, 30, 30, juce::RectanglePlacement::centred,
+                        true);
+    }
+  }
 }
 
 void BottomBarComponent::resized() {
@@ -85,6 +95,7 @@ void BottomBarComponent::resized() {
   bottomArea.removeFromRight(15); // Add some spacing before the slider
 
   // Left-aligned playback buttons
+  bottomArea.removeFromLeft(35); // Space for Logo
   playButton->setBounds(bottomArea.removeFromLeft(btnWidth));
   bottomArea.removeFromLeft(10);
   stopButton->setBounds(bottomArea.removeFromLeft(btnWidth));

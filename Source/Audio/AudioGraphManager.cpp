@@ -19,7 +19,7 @@ public:
 
   void processBlock(juce::AudioBuffer<float> &buffer,
                     juce::MidiBuffer &midiMessages) override {
-    buffer.clear(); // We only process MIDI
+    buffer.clear();
     juce::MidiBuffer filtered;
     for (const auto metadata : midiMessages) {
       auto msg = metadata.getMessage();
@@ -28,17 +28,71 @@ public:
         if (msg.isProgramChange()) {
           channelPrograms[ch - 1] = msg.getProgramChangeNumber();
         }
-        InstrumentGroup group =
-            MidiHelper::getInstrumentType(channelPrograms[ch - 1]);
+
+        bool isDrum = (ch == 10); // MIDI channel 10 = drum channel
+
+        InstrumentGroup group;
+        if (isDrum) {
+          // For drums: route based on note number (for note-on/off),
+          // or pass through if any drum group is routed to this destination
+          if (msg.isNoteOnOrOff()) {
+            group = MidiHelper::getInstrumentDrumType(msg.getNoteNumber());
+          } else {
+            // Non-note drum messages (CC, pitch, etc.) — pass through to
+            // this dest if any drum group is assigned to it
+            bool anyDrumRouted = false;
+            for (int n = 0; n < 128; ++n) {
+              InstrumentGroup g = MidiHelper::getInstrumentDrumType(n);
+              if (mixerController.getTrackOutputDestination(g) ==
+                  targetDestination) {
+                anyDrumRouted = true;
+                break;
+              }
+            }
+            if (anyDrumRouted)
+              filtered.addEvent(msg, metadata.samplePosition);
+            continue;
+          }
+        } else {
+          group = MidiHelper::getInstrumentType(channelPrograms[ch - 1]);
+        }
+
         if (mixerController.getTrackOutputDestination(group) ==
             targetDestination) {
-          filtered.addEvent(msg, metadata.samplePosition);
+
+          if (mixerController.isTrackPlaying(group)) {
+            filtered.addEvent(msg, metadata.samplePosition);
+
+            // Simulating VU Meter for VSTi output since we don't have
+            // per-instrument audio streams
+            if (msg.isNoteOn()) {
+              float velocity = msg.getFloatVelocity();
+              vstiSimulatedPeaks[group] =
+                  std::max(vstiSimulatedPeaks[group], velocity);
+            }
+          }
         }
       } else {
         filtered.addEvent(msg, metadata.samplePosition);
       }
     }
     midiMessages.swapWith(filtered);
+
+    // Apply artificial VU decay and push to UI for all VSTi-routed instruments
+    for (int i = 0; i <= (int)InstrumentGroup::VocalBus; ++i) {
+      InstrumentGroup group = static_cast<InstrumentGroup>(i);
+      if (mixerController.getTrackOutputDestination(group) ==
+          targetDestination) {
+        float peak = vstiSimulatedPeaks[group];
+        if (peak > 0.001f) {
+          mixerController.setTrackLevel(group, peak, peak);
+          vstiSimulatedPeaks[group] *= 0.85f; // Decay by 15% per block
+        } else {
+          vstiSimulatedPeaks[group] = 0.0f;
+          mixerController.setTrackLevel(group, 0.0f, 0.0f);
+        }
+      }
+    }
   }
 
   juce::AudioProcessorEditor *createEditor() override { return nullptr; }
@@ -60,7 +114,62 @@ private:
   MixerController &mixerController;
   OutputDestination targetDestination;
   int channelPrograms[16] = {0};
+  std::map<InstrumentGroup, float> vstiSimulatedPeaks;
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiFilterProcessor)
+};
+
+//==============================================================================
+// VstiGainProcessor — measures peak and applies simple gain for VSTi slots
+//==============================================================================
+class VstiGainProcessor : public juce::AudioProcessor {
+public:
+  VstiGainProcessor()
+      : AudioProcessor(
+            BusesProperties()
+                .withInput("Input", juce::AudioChannelSet::stereo(), true)
+                .withOutput("Output", juce::AudioChannelSet::stereo(), true)) {}
+
+  ~VstiGainProcessor() override = default;
+
+  void prepareToPlay(double, int) override {}
+  void releaseResources() override {}
+
+  void processBlock(juce::AudioBuffer<float> &buffer,
+                    juce::MidiBuffer &) override {
+    const float g = gain.load();
+    if (std::abs(g - 1.0f) > 0.0001f)
+      buffer.applyGain(g);
+
+    float currentPeak = 0.0f;
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
+      currentPeak = juce::jmax(
+          currentPeak, buffer.getMagnitude(ch, 0, buffer.getNumSamples()));
+    }
+    peakLevel.store(currentPeak);
+  }
+
+  juce::AudioProcessorEditor *createEditor() override { return nullptr; }
+  bool hasEditor() const override { return false; }
+  const juce::String getName() const override { return "VSTi Gain"; }
+  bool acceptsMidi() const override { return false; }
+  bool producesMidi() const override { return false; }
+  bool isMidiEffect() const override { return false; }
+  double getTailLengthSeconds() const override { return 0.0; }
+  int getNumPrograms() override { return 1; }
+  int getCurrentProgram() override { return 0; }
+  void setCurrentProgram(int) override {}
+  const juce::String getProgramName(int) override { return {}; }
+  void changeProgramName(int, const juce::String &) override {}
+  void getStateInformation(juce::MemoryBlock &) override {}
+  void setStateInformation(const void *, int) override {}
+
+  void setGain(float g) { gain.store(g); }
+  float getPeakLevel() const { return peakLevel.load(); }
+
+private:
+  std::atomic<float> gain{1.0f};
+  std::atomic<float> peakLevel{0.0f};
+  JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VstiGainProcessor)
 };
 
 AudioGraphManager::AudioGraphManager(MixerController &mc)
@@ -97,9 +206,22 @@ tsf *AudioGraphManager::getSharedSoundFont(const juce::String &path) {
   }
 
   // Load new and cache
-  tsf *newSynth = tsf_load_filename(path.toUTF8());
+  // Use JUCE to read file data so we get proper Unicode path support
+  // (tsf_load_filename uses fopen which doesn't handle Unicode on Windows)
+  juce::MemoryBlock fileData;
+  if (!juce::File(path).loadFileAsData(fileData)) {
+    juce::File("C:\\temp\\crash.log")
+        .appendText("getSharedSoundFont: Failed to read file: " + path + "\n");
+    return nullptr;
+  }
+  tsf *newSynth = tsf_load_memory(fileData.getData(), (int)fileData.getSize());
   if (newSynth != nullptr) {
     sharedSoundFonts[path] = newSynth;
+  } else {
+    juce::File("C:\\temp\\crash.log")
+        .appendText(
+            "getSharedSoundFont: tsf_load_memory returned nullptr for: " +
+            path + "\n");
   }
   return newSynth;
 }
@@ -123,13 +245,28 @@ void AudioGraphManager::initialiseGraph() {
       std::make_unique<SF2Source>(&mixerController, std::nullopt);
   globalSynthNode = mainGraph.addNode(std::move(synthProcessor));
 
+  // Create the filter for global synth (only allows SF2-routed channels)
+  auto globalFilterProcessor = std::make_unique<MidiFilterProcessor>(
+      mixerController, OutputDestination::SF2);
+  globalFilterNode = mainGraph.addNode(std::move(globalFilterProcessor));
+
   mainGraph.addConnection(
       {{midiInputNode->nodeID, juce::AudioProcessorGraph::midiChannelIndex},
+       {globalFilterNode->nodeID,
+        juce::AudioProcessorGraph::midiChannelIndex}});
+
+  mainGraph.addConnection(
+      {{globalFilterNode->nodeID, juce::AudioProcessorGraph::midiChannelIndex},
        {globalSynthNode->nodeID, juce::AudioProcessorGraph::midiChannelIndex}});
 
   for (int channel = 0; channel < 2; ++channel) {
     mainGraph.addConnection({{globalSynthNode->nodeID, channel},
                              {audioOutputNode->nodeID, channel}});
+  }
+
+  // Create VstiGainProcessor nodes for each slot 1-8 (0-7 indexing internally)
+  for (int i = 0; i < 8; ++i) {
+    vstiGainNodes[i] = mainGraph.addNode(std::make_unique<VstiGainProcessor>());
   }
 
   DBG("AudioGraphManager: Graph initialized. Output channels: "
@@ -268,6 +405,9 @@ void AudioGraphManager::removeVstFxPlugin(InstrumentGroup group,
 }
 
 void AudioGraphManager::setSoundFont(const juce::File &sf2File) {
+  juce::File("C:\\temp\\crash.log")
+      .appendText(
+          "AudioGraphManager Loading SF2: " + sf2File.getFullPathName() + "\n");
   currentSoundFont = sf2File;
 
   tsf *sharedSynth = nullptr;
@@ -281,6 +421,9 @@ void AudioGraphManager::setSoundFont(const juce::File &sf2File) {
       sf2Source->loadSoundFont(sf2File, sharedSynth);
     }
   }
+
+  // Ensure routing is maintained after a synth is constructed or updated.
+  rebuildGraphRouting();
 }
 
 void AudioGraphManager::resetSynthesizers() {
@@ -308,9 +451,21 @@ void AudioGraphManager::resetSynthesizers() {
 }
 
 void AudioGraphManager::prepareToPlay(double sampleRate, int samplesPerBlock) {
-  mainGraph.setPlayConfigDetails(getTotalNumInputChannels(),
-                                 getTotalNumOutputChannels(), sampleRate,
-                                 samplesPerBlock);
+  juce::File("C:\\temp\\crash.log")
+      .appendText("AudioGraphManager::prepareToPlay Called.\n");
+  if (globalSynthNode != nullptr && !currentSoundFont.existsAsFile()) {
+    auto defaultPath = mixerController.getGlobalSF2Path();
+    juce::File("C:\\temp\\crash.log")
+        .appendText("prepareToPlay Default SF2 Path: " + defaultPath + "\n");
+    if (defaultPath.isNotEmpty()) {
+      setSoundFont(juce::File(defaultPath));
+    }
+  }
+
+  // The AudioProcessorPlayer gives KaraokeEngine a stereo buffer,
+  // so the graph must also be prepared with 2 inputs and 2 outputs
+  // otherwise it will silently reject the buffer and drop all audio.
+  mainGraph.setPlayConfigDetails(2, 2, sampleRate, samplesPerBlock);
   mainGraph.prepareToPlay(sampleRate, samplesPerBlock);
 }
 
@@ -329,37 +484,87 @@ void AudioGraphManager::getNextAudioBlock(juce::AudioBuffer<float> &buffer,
   juce::MidiBuffer midiBuffer;
   player.getNextAudioBlock(midiBuffer, numSamples, sampleRate);
 
-  // Process the graph (which includes our synth and any VSTs)
-  buffer.clear();
+  // The output buffer might have 0 inputs if the OS audio device has no mic.
+  // But AudioProcessorGraph is prepared with 2 inputs and 2 outputs.
+  // We MUST process into a guaranteed 2-in/2-out buffer to avoid silent
+  // rejection.
+  juce::AudioBuffer<float> graphBuffer(2, numSamples);
+  graphBuffer.clear();
 
   // Process the entire graph normally!
-  processBlock(buffer, midiBuffer);
+  juce::ScopedNoDenormals noDenormals;
+  mainGraph.processBlock(graphBuffer, midiBuffer);
+
+  // Copy the processed stereo audio back into the actual destination buffer
+  buffer.clear();
+  for (int i = 0;
+       i < juce::jmin(buffer.getNumChannels(), graphBuffer.getNumChannels());
+       ++i) {
+    buffer.copyFrom(i, 0, graphBuffer, i, 0, numSamples);
+  }
 
   static int emptyCounter = 0;
-  if (buffer.getMagnitude(0, buffer.getNumSamples()) < 0.0001f) {
+  if (graphBuffer.getMagnitude(0, graphBuffer.getNumSamples()) < 0.0001f) {
     if (++emptyCounter % 500 == 0)
-      DBG("AudioGraphManager: Buffer is silent after processing.");
+      juce::File("C:\\temp\\crash.log")
+          .appendText(
+              "AudioGraphManager: Buffer is silent after processing.\n");
   } else {
     if (emptyCounter > 0)
-      DBG("AudioGraphManager: Buffer has AUDIO!");
+      juce::File("C:\\temp\\crash.log")
+          .appendText("AudioGraphManager: Buffer has AUDIO from Graph!\n");
     emptyCounter = 0;
   }
 }
 
 void AudioGraphManager::rebuildGraphRouting() {
-  for (const auto &connection : mainGraph.getConnections()) {
+  auto connections = mainGraph.getConnections();
+  for (const auto &connection : connections) {
     mainGraph.removeConnection(connection);
   }
 
   if (midiInputNode == nullptr || audioOutputNode == nullptr)
     return;
 
-  // 1. Connect MIDI Input
+  // Push latest custom SF2 routing down to the SF2Source engine
   if (globalSynthNode != nullptr) {
+    if (auto *sf2Source =
+            dynamic_cast<SF2Source *>(globalSynthNode->getProcessor())) {
+      std::map<InstrumentGroup, juce::String> currentPaths;
+      for (int i = 0; i <= (int)InstrumentGroup::Percussive; ++i) {
+        InstrumentGroup group = static_cast<InstrumentGroup>(i);
+        juce::String path = mixerController.getTrackSF2Path(group);
+        if (path.isNotEmpty() && mixerController.getTrackOutputDestination(
+                                     group) == OutputDestination::SF2) {
+          currentPaths[group] = path;
+        }
+      }
+      for (int i = 100; i <= (int)InstrumentGroup::PercussionDrum; ++i) {
+        InstrumentGroup group = static_cast<InstrumentGroup>(i);
+        juce::String path = mixerController.getTrackSF2Path(group);
+        if (path.isNotEmpty() && mixerController.getTrackOutputDestination(
+                                     group) == OutputDestination::SF2) {
+          currentPaths[group] = path;
+        }
+      }
+      sf2Source->updateCustomSF2Routing(currentPaths,
+                                        [this](const juce::String &path) {
+                                          return this->getSharedSoundFont(path);
+                                        });
+    }
+  }
+
+  // 1. Connect MIDI Input
+  if (globalSynthNode != nullptr && globalFilterNode != nullptr) {
     mainGraph.addConnection(
         {{midiInputNode->nodeID, juce::AudioProcessorGraph::midiChannelIndex},
-         {globalSynthNode->nodeID,
+         {globalFilterNode->nodeID,
           juce::AudioProcessorGraph::midiChannelIndex}});
+
+    mainGraph.addConnection({{globalFilterNode->nodeID,
+                              juce::AudioProcessorGraph::midiChannelIndex},
+                             {globalSynthNode->nodeID,
+                              juce::AudioProcessorGraph::midiChannelIndex}});
   }
   for (auto &pair : vstiNodes) {
     int slotIndex = pair.first;
@@ -387,8 +592,23 @@ void AudioGraphManager::rebuildGraphRouting() {
   }
 
   for (auto &pair : vstiNodes) {
-    if (pair.second != nullptr) {
-      int outChans = pair.second->getProcessor()->getTotalNumOutputChannels();
+    int slot = pair.first;
+    if (pair.second == nullptr)
+      continue;
+
+    int outChans = pair.second->getProcessor()->getTotalNumOutputChannels();
+
+    // 3. Connect VSTi Node -> VstiGainNode -> AudioOutputNode
+    auto &gainNode = vstiGainNodes[slot];
+    if (gainNode != nullptr) {
+      for (int ch = 0; ch < juce::jmin(outChans, 2); ++ch) {
+        mainGraph.addConnection(
+            {{pair.second->nodeID, ch}, {gainNode->nodeID, ch}});
+        mainGraph.addConnection(
+            {{gainNode->nodeID, ch}, {audioOutputNode->nodeID, ch}});
+      }
+    } else {
+      // Fallback if gain node is missing for some reason
       for (int ch = 0; ch < juce::jmin(outChans, 2); ++ch) {
         mainGraph.addConnection(
             {{pair.second->nodeID, ch}, {audioOutputNode->nodeID, ch}});
@@ -399,4 +619,19 @@ void AudioGraphManager::rebuildGraphRouting() {
 
 void AudioGraphManager::getStateInformation(juce::MemoryBlock &destData) {}
 void AudioGraphManager::setStateInformation(const void *data, int sizeInBytes) {
+}
+
+void AudioGraphManager::setVstiVolume(int slotIndex, float gain) {
+  if (slotIndex >= 0 && slotIndex < 8 && vstiGainNodes[slotIndex] != nullptr)
+    if (auto *p = dynamic_cast<VstiGainProcessor *>(
+            vstiGainNodes[slotIndex]->getProcessor()))
+      p->setGain(gain);
+}
+
+float AudioGraphManager::getVstiPeak(int slotIndex) const {
+  if (slotIndex >= 0 && slotIndex < 8 && vstiGainNodes[slotIndex] != nullptr)
+    if (auto *p = dynamic_cast<VstiGainProcessor *>(
+            vstiGainNodes[slotIndex]->getProcessor()))
+      return p->getPeakLevel();
+  return 0.0f;
 }

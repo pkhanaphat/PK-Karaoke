@@ -59,9 +59,20 @@ enum class InstrumentGroup {
   Timbale,
   ThaiChing,
   PercussionDrum,
+  DrumBus = 120,
 
   // Vocal
   VocalBus = 149,
+
+  // VSTi Outputs
+  VSTi1 = 160,
+  VSTi2,
+  VSTi3,
+  VSTi4,
+  VSTi5,
+  VSTi6,
+  VSTi7,
+  VSTi8,
 
   // FX & Master Bus
   ReverbBus = 200,

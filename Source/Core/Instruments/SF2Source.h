@@ -3,7 +3,9 @@
 #include "Core/MidiHelper.h"
 #include "Core/Routing/MixerController.h"
 #include <JuceHeader.h>
+#include <functional>
 #include <optional>
+
 
 /**
  * SF2Source — SoundFont (.sf2) Instrument สำหรับ PK Karaoke
@@ -25,6 +27,10 @@ public:
   void setTargetGroup(std::optional<InstrumentGroup> group) {
     targetGroup = group;
   }
+
+  void updateCustomSF2Routing(
+      const std::map<InstrumentGroup, juce::String> &customPaths,
+      std::function<tsf *(const juce::String &)> getSharedFontCallback);
 
   //==========================================================================
   // AudioProcessor interface
@@ -65,8 +71,10 @@ private:
 
   std::optional<InstrumentGroup> targetGroup; // Only play this group
   std::map<InstrumentGroup, tsf *> drumSynths;
+  std::map<InstrumentGroup, tsf *> customSynths; // For custom SF2 per-track
 
   void freeSynths();
+
   void renderChannels(juce::AudioBuffer<float> &dest, int startSample,
                       int numSamples);
   void processMidiMessage(const juce::MidiMessage &msg);
