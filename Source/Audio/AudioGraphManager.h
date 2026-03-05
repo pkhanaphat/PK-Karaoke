@@ -53,6 +53,7 @@ public:
   bool loadVstFxPlugin(InstrumentGroup group, int slotIndex,
                        const juce::String &pluginPath);
   void removeVstFxPlugin(InstrumentGroup group, int slotIndex);
+  void openVstFxPluginEditor(InstrumentGroup group, int slotIndex);
 
   void setSoundFont(const juce::File &sf2File);
   void resetSynthesizers();
@@ -115,6 +116,14 @@ private:
   std::map<int, juce::Component::SafePointer<juce::DocumentWindow>> vstiWindows;
 
   std::map<juce::String, tsf *> sharedSoundFonts;
+
+  // Track FX Nodes
+  std::map<InstrumentGroup, std::array<Node::Ptr, 4>> fxNodes;
+  std::map<InstrumentGroup,
+           std::array<juce::Component::SafePointer<juce::DocumentWindow>, 4>>
+      fxWindows;
+  std::map<InstrumentGroup, Node::Ptr> splitSynthNodes;
+  std::map<InstrumentGroup, Node::Ptr> splitFilterNodes;
 
   MixerController &mixerController;
   PluginHost pluginHost;

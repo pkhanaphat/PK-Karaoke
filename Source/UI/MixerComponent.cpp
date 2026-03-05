@@ -1,10 +1,48 @@
 ﻿#include "UI/MixerComponent.h"
 #include "Core/MidiHelper.h"
+#include <algorithm>
+#include <functional>
+#include <map>
+#include <vector>
 
 //==============================================================================
 // Helpers
 //==============================================================================
 static float clampDb(float db) { return juce::jlimit(-99.0f, 6.0f, db); }
+
+namespace {
+void populatePluginMenu(
+    juce::PopupMenu &menu, AudioGraphManager &audioGraphManager,
+    std::function<void(const juce::PluginDescription &)> onPluginSelected) {
+  auto &knownList = audioGraphManager.getPluginHost().getKnownPluginList();
+
+  std::map<juce::String, std::vector<juce::PluginDescription>> categories;
+  for (int i = 0; i < knownList.getNumTypes(); ++i) {
+    if (auto *desc = knownList.getType(i)) {
+      juce::String category =
+          desc->category.isNotEmpty() ? desc->category : "Other";
+      categories[category].push_back(*desc);
+    }
+  }
+
+  for (auto &pair : categories) {
+    juce::PopupMenu categoryMenu;
+
+    auto &plugins = pair.second;
+    std::sort(
+        plugins.begin(), plugins.end(),
+        [](const juce::PluginDescription &a, const juce::PluginDescription &b) {
+          return a.name.compareIgnoreCase(b.name) < 0;
+        });
+
+    for (auto &desc : plugins) {
+      categoryMenu.addItem(
+          desc.name, [desc, onPluginSelected]() { onPluginSelected(desc); });
+    }
+    menu.addSubMenu(pair.first, categoryMenu);
+  }
+}
+} // namespace
 
 //==============================================================================
 // ChannelStripComponent
@@ -53,6 +91,7 @@ ChannelStripComponent::ChannelStripComponent(MixerController &mc,
   for (int i = 0; i < 4; ++i) {
     insertSlots[i].setButtonText("+");
     insertSlots[i].setTooltip("Insert FX " + juce::String(i + 1));
+    insertSlots[i].addListener(this);
     addAndMakeVisible(insertSlots[i]);
   }
 
@@ -186,6 +225,9 @@ void ChannelStripComponent::buttonClicked(juce::Button *b) {
           mixerController.getVstPluginPath(trackGroup, i).isNotEmpty();
 
       if (hasPlugin) {
+        menu.addItem("Open Editor", [this, i]() {
+          audioGraphManager.openVstFxPluginEditor(trackGroup, i);
+        });
         menu.addItem(
             "Bypass", true, mixerController.getVstPluginBypass(trackGroup, i),
             [this, i]() {
@@ -198,8 +240,43 @@ void ChannelStripComponent::buttonClicked(juce::Button *b) {
           audioGraphManager.removeVstFxPlugin(trackGroup, i);
           updateStateFromController();
         });
+        menu.addSeparator();
+        juce::PopupMenu replaceMenu;
+        populatePluginMenu(replaceMenu, audioGraphManager,
+                           [this, i](const juce::PluginDescription &desc) {
+                             if (audioGraphManager.loadVstFxPlugin(
+                                     trackGroup, i, desc.fileOrIdentifier)) {
+                               updateStateFromController();
+                             }
+                           });
+        replaceMenu.addSeparator();
+        replaceMenu.addItem("Load VST from file...", [this, i]() {
+          pluginChooser = std::make_unique<juce::FileChooser>(
+              "Select VST3 Plugin", juce::File(), "*.vst3");
+          pluginChooser->launchAsync(
+              juce::FileBrowserComponent::openMode |
+                  juce::FileBrowserComponent::canSelectFiles,
+              [this, i](const juce::FileChooser &fc) {
+                auto file = fc.getResult();
+                if (file.existsAsFile()) {
+                  if (audioGraphManager.loadVstFxPlugin(
+                          trackGroup, i, file.getFullPathName())) {
+                    updateStateFromController();
+                  }
+                }
+              });
+        });
+        menu.addSubMenu("Replace VST", replaceMenu);
       } else {
-        menu.addItem("Load VST...", [this, i]() {
+        populatePluginMenu(menu, audioGraphManager,
+                           [this, i](const juce::PluginDescription &desc) {
+                             if (audioGraphManager.loadVstFxPlugin(
+                                     trackGroup, i, desc.fileOrIdentifier)) {
+                               updateStateFromController();
+                             }
+                           });
+        menu.addSeparator();
+        menu.addItem("Load VST from file...", [this, i]() {
           pluginChooser = std::make_unique<juce::FileChooser>(
               "Select VST3 Plugin", juce::File(), "*.vst3");
           pluginChooser->launchAsync(
@@ -499,6 +576,7 @@ FXStripComponent::FXStripComponent(MixerController &mc, AudioGraphManager &agm,
   for (int i = 0; i < 4; ++i) {
     insertSlots[i].setButtonText("+");
     insertSlots[i].setTooltip("Insert FX " + juce::String(i + 1));
+    insertSlots[i].addListener(this);
     addAndMakeVisible(insertSlots[i]);
   }
 
@@ -542,6 +620,89 @@ void FXStripComponent::sliderValueChanged(juce::Slider *s) {
     mixerController.setTrackVolume(
         fxGroup,
         juce::Decibels::decibelsToGain((float)returnVolumeFader.getValue()));
+}
+
+void FXStripComponent::buttonClicked(juce::Button *b) {
+  for (int i = 0; i < 4; ++i) {
+    if (b == &insertSlots[i]) {
+      juce::PopupMenu menu;
+      bool hasPlugin =
+          mixerController.getVstPluginPath(fxGroup, i).isNotEmpty();
+
+      if (hasPlugin) {
+        menu.addItem("Open Editor", [this, i]() {
+          audioGraphManager.openVstFxPluginEditor(fxGroup, i);
+        });
+        menu.addItem(
+            "Bypass", true, mixerController.getVstPluginBypass(fxGroup, i),
+            [this, i]() {
+              bool bypass = !mixerController.getVstPluginBypass(fxGroup, i);
+              mixerController.setVstPluginBypass(fxGroup, i, bypass);
+              audioGraphManager.rebuildGraphRouting();
+            });
+        menu.addItem("Remove Plugin", [this, i]() {
+          audioGraphManager.removeVstFxPlugin(fxGroup, i);
+          insertSlots[i].setButtonText("+");
+        });
+        menu.addSeparator();
+        juce::PopupMenu replaceMenu;
+        populatePluginMenu(replaceMenu, audioGraphManager,
+                           [this, i](const juce::PluginDescription &desc) {
+                             if (audioGraphManager.loadVstFxPlugin(
+                                     fxGroup, i, desc.fileOrIdentifier)) {
+                               insertSlots[i].setButtonText(desc.name);
+                             }
+                           });
+        replaceMenu.addSeparator();
+        replaceMenu.addItem("Load VST from file...", [this, i]() {
+          pluginChooser = std::make_unique<juce::FileChooser>(
+              "Select VST3 Plugin", juce::File(), "*.vst3");
+          pluginChooser->launchAsync(
+              juce::FileBrowserComponent::openMode |
+                  juce::FileBrowserComponent::canSelectFiles,
+              [this, i](const juce::FileChooser &fc) {
+                auto file = fc.getResult();
+                if (file.existsAsFile()) {
+                  if (audioGraphManager.loadVstFxPlugin(
+                          fxGroup, i, file.getFullPathName())) {
+                    insertSlots[i].setButtonText(
+                        file.getFileNameWithoutExtension());
+                  }
+                }
+              });
+        });
+        menu.addSubMenu("Replace VST", replaceMenu);
+      } else {
+        populatePluginMenu(menu, audioGraphManager,
+                           [this, i](const juce::PluginDescription &desc) {
+                             if (audioGraphManager.loadVstFxPlugin(
+                                     fxGroup, i, desc.fileOrIdentifier)) {
+                               insertSlots[i].setButtonText(desc.name);
+                             }
+                           });
+        menu.addSeparator();
+        menu.addItem("Load VST from file...", [this, i]() {
+          pluginChooser = std::make_unique<juce::FileChooser>(
+              "Select VST3 Plugin", juce::File(), "*.vst3");
+          pluginChooser->launchAsync(
+              juce::FileBrowserComponent::openMode |
+                  juce::FileBrowserComponent::canSelectFiles,
+              [this, i](const juce::FileChooser &fc) {
+                auto file = fc.getResult();
+                if (file.existsAsFile()) {
+                  if (audioGraphManager.loadVstFxPlugin(
+                          fxGroup, i, file.getFullPathName())) {
+                    insertSlots[i].setButtonText(
+                        file.getFileNameWithoutExtension());
+                  }
+                }
+              });
+        });
+      }
+      menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(b));
+      return;
+    }
+  }
 }
 
 void FXStripComponent::setExpanded(bool expanded) {
@@ -652,6 +813,7 @@ MasterStripComponent::MasterStripComponent(MixerController &mc,
   for (int i = 0; i < 4; ++i) {
     insertSlots[i].setButtonText("+");
     insertSlots[i].setTooltip("Insert Master Bus " + juce::String(i + 1));
+    insertSlots[i].addListener(this);
     addAndMakeVisible(insertSlots[i]);
   }
 
@@ -691,6 +853,92 @@ void MasterStripComponent::sliderValueChanged(juce::Slider *s) {
     mixerController.setTrackVolume(
         InstrumentGroup::MasterBus,
         juce::Decibels::decibelsToGain((float)masterFader.getValue()));
+}
+
+void MasterStripComponent::buttonClicked(juce::Button *b) {
+  auto masterGroup = InstrumentGroup::MasterBus;
+  for (int i = 0; i < 4; ++i) {
+    if (b == &insertSlots[i]) {
+      juce::PopupMenu menu;
+      bool hasPlugin =
+          mixerController.getVstPluginPath(masterGroup, i).isNotEmpty();
+
+      if (hasPlugin) {
+        menu.addItem("Open Editor", [this, i, masterGroup]() {
+          audioGraphManager.openVstFxPluginEditor(masterGroup, i);
+        });
+        menu.addItem(
+            "Bypass", true, mixerController.getVstPluginBypass(masterGroup, i),
+            [this, i, masterGroup]() {
+              bool bypass = !mixerController.getVstPluginBypass(masterGroup, i);
+              mixerController.setVstPluginBypass(masterGroup, i, bypass);
+              audioGraphManager.rebuildGraphRouting();
+            });
+        menu.addItem("Remove Plugin", [this, i, masterGroup]() {
+          audioGraphManager.removeVstFxPlugin(masterGroup, i);
+          insertSlots[i].setButtonText("+");
+        });
+        menu.addSeparator();
+        juce::PopupMenu replaceMenu;
+        populatePluginMenu(
+            replaceMenu, audioGraphManager,
+            [this, i, masterGroup](const juce::PluginDescription &desc) {
+              if (audioGraphManager.loadVstFxPlugin(masterGroup, i,
+                                                    desc.fileOrIdentifier)) {
+                insertSlots[i].setButtonText(desc.name);
+              }
+            });
+        replaceMenu.addSeparator();
+        replaceMenu.addItem("Load VST from file...", [this, i, masterGroup]() {
+          pluginChooser = std::make_unique<juce::FileChooser>(
+              "Select VST3 Plugin", juce::File(), "*.vst3");
+          pluginChooser->launchAsync(
+              juce::FileBrowserComponent::openMode |
+                  juce::FileBrowserComponent::canSelectFiles,
+              [this, i, masterGroup](const juce::FileChooser &fc) {
+                auto file = fc.getResult();
+                if (file.existsAsFile()) {
+                  if (audioGraphManager.loadVstFxPlugin(
+                          masterGroup, i, file.getFullPathName())) {
+                    insertSlots[i].setButtonText(
+                        file.getFileNameWithoutExtension());
+                  }
+                }
+              });
+        });
+        menu.addSubMenu("Replace VST", replaceMenu);
+      } else {
+        populatePluginMenu(
+            menu, audioGraphManager,
+            [this, i, masterGroup](const juce::PluginDescription &desc) {
+              if (audioGraphManager.loadVstFxPlugin(masterGroup, i,
+                                                    desc.fileOrIdentifier)) {
+                insertSlots[i].setButtonText(desc.name);
+              }
+            });
+        menu.addSeparator();
+        menu.addItem("Load VST from file...", [this, i, masterGroup]() {
+          pluginChooser = std::make_unique<juce::FileChooser>(
+              "Select VST3 Plugin", juce::File(), "*.vst3");
+          pluginChooser->launchAsync(
+              juce::FileBrowserComponent::openMode |
+                  juce::FileBrowserComponent::canSelectFiles,
+              [this, i, masterGroup](const juce::FileChooser &fc) {
+                auto file = fc.getResult();
+                if (file.existsAsFile()) {
+                  if (audioGraphManager.loadVstFxPlugin(
+                          masterGroup, i, file.getFullPathName())) {
+                    insertSlots[i].setButtonText(
+                        file.getFileNameWithoutExtension());
+                  }
+                }
+              });
+        });
+      }
+      menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(b));
+      return;
+    }
+  }
 }
 
 void MasterStripComponent::setExpanded(bool expanded) {
@@ -814,6 +1062,7 @@ VstiStripComponent::VstiStripComponent(MixerController &mc,
   for (int i = 0; i < 4; ++i) {
     insertSlots[i].setButtonText("+");
     insertSlots[i].setTooltip("Insert VSTi FX " + juce::String(i + 1));
+    insertSlots[i].addListener(this);
     addAndMakeVisible(insertSlots[i]);
   }
 
@@ -942,6 +1191,88 @@ void VstiStripComponent::buttonClicked(juce::Button *b) {
     mixerController.setTrackSolo(vstiGroup, soloButton.getToggleState());
   }
 
+  for (int i = 0; i < 4; ++i) {
+    if (b == &insertSlots[i]) {
+      juce::PopupMenu menu;
+      bool hasPlugin =
+          mixerController.getVstPluginPath(vstiGroup, i).isNotEmpty();
+
+      if (hasPlugin) {
+        menu.addItem("Open Editor", [this, i, vstiGroup]() {
+          audioGraphManager.openVstFxPluginEditor(vstiGroup, i);
+        });
+        menu.addItem(
+            "Bypass", true, mixerController.getVstPluginBypass(vstiGroup, i),
+            [this, i, vstiGroup]() {
+              bool bypass = !mixerController.getVstPluginBypass(vstiGroup, i);
+              mixerController.setVstPluginBypass(vstiGroup, i, bypass);
+              audioGraphManager.rebuildGraphRouting();
+              updateStateFromController();
+            });
+        menu.addItem("Remove Plugin", [this, i, vstiGroup]() {
+          audioGraphManager.removeVstFxPlugin(vstiGroup, i);
+          updateStateFromController();
+        });
+        menu.addSeparator();
+        juce::PopupMenu replaceMenu;
+        populatePluginMenu(
+            replaceMenu, audioGraphManager,
+            [this, i, vstiGroup](const juce::PluginDescription &desc) {
+              if (audioGraphManager.loadVstFxPlugin(vstiGroup, i,
+                                                    desc.fileOrIdentifier)) {
+                updateStateFromController();
+              }
+            });
+        replaceMenu.addSeparator();
+        replaceMenu.addItem("Load VST from file...", [this, i, vstiGroup]() {
+          pluginChooser = std::make_unique<juce::FileChooser>(
+              "Select VST3 Plugin", juce::File(), "*.vst3");
+          pluginChooser->launchAsync(
+              juce::FileBrowserComponent::openMode |
+                  juce::FileBrowserComponent::canSelectFiles,
+              [this, i, vstiGroup](const juce::FileChooser &fc) {
+                auto file = fc.getResult();
+                if (file.existsAsFile()) {
+                  if (audioGraphManager.loadVstFxPlugin(
+                          vstiGroup, i, file.getFullPathName())) {
+                    updateStateFromController();
+                  }
+                }
+              });
+        });
+        menu.addSubMenu("Replace VST", replaceMenu);
+      } else {
+        populatePluginMenu(
+            menu, audioGraphManager,
+            [this, i, vstiGroup](const juce::PluginDescription &desc) {
+              if (audioGraphManager.loadVstFxPlugin(vstiGroup, i,
+                                                    desc.fileOrIdentifier)) {
+                updateStateFromController();
+              }
+            });
+        menu.addSeparator();
+        menu.addItem("Load VST from file...", [this, i, vstiGroup]() {
+          pluginChooser = std::make_unique<juce::FileChooser>(
+              "Select VST3 Plugin", juce::File(), "*.vst3");
+          pluginChooser->launchAsync(
+              juce::FileBrowserComponent::openMode |
+                  juce::FileBrowserComponent::canSelectFiles,
+              [this, i, vstiGroup](const juce::FileChooser &fc) {
+                auto file = fc.getResult();
+                if (file.existsAsFile()) {
+                  if (audioGraphManager.loadVstFxPlugin(
+                          vstiGroup, i, file.getFullPathName())) {
+                    updateStateFromController();
+                  }
+                }
+              });
+        });
+      }
+      menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(b));
+      return;
+    }
+  }
+
   // refresh all strips
   if (auto *mixer = findParentComponentOfClass<MixerComponent>())
     mixer->updateAllStrips();
@@ -968,6 +1299,18 @@ void VstiStripComponent::updateStateFromController() {
                             juce::dontSendNotification);
   gainKnob.setValue(mixerController.getTrackGain(vstiGroup),
                     juce::dontSendNotification);
+
+  for (int i = 0; i < 4; ++i) {
+    auto path = mixerController.getVstPluginPath(vstiGroup, i);
+    if (path.isNotEmpty()) {
+      bool bypass = mixerController.getVstPluginBypass(vstiGroup, i);
+      insertSlots[i].setButtonText(
+          bypass ? "[B] " + juce::File(path).getFileNameWithoutExtension()
+                 : juce::File(path).getFileNameWithoutExtension());
+    } else {
+      insertSlots[i].setButtonText("+");
+    }
+  }
 }
 
 void VstiStripComponent::updateNameFromGraph() {

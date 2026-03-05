@@ -6,7 +6,6 @@
 #include <functional>
 #include <optional>
 
-
 /**
  * SF2Source — SoundFont (.sf2) Instrument สำหรับ PK Karaoke
  * Extends juce::AudioProcessor เพื่อใช้ใน AudioProcessorGraph ได้โดยตรง
@@ -26,6 +25,11 @@ public:
   void setMixerController(MixerController *mc) { mixer = mc; }
   void setTargetGroup(std::optional<InstrumentGroup> group) {
     targetGroup = group;
+  }
+
+  void setExcludedGroups(const std::vector<InstrumentGroup> &groups) {
+    const juce::ScopedLock sl(lock);
+    excludedGroups = groups;
   }
 
   void updateCustomSF2Routing(
@@ -69,7 +73,8 @@ private:
   int maxSamplesPerBlock = 1024;
   juce::HeapBlock<float> interleavedBuffer;
 
-  std::optional<InstrumentGroup> targetGroup; // Only play this group
+  std::optional<InstrumentGroup> targetGroup;  // Only play this group
+  std::vector<InstrumentGroup> excludedGroups; // Do not play these groups
   std::map<InstrumentGroup, tsf *> drumSynths;
   std::map<InstrumentGroup, tsf *> customSynths; // For custom SF2 per-track
 

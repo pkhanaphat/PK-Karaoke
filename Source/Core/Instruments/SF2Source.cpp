@@ -282,6 +282,10 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
     if (targetGroup.has_value() && targetGroup.value() != group)
       continue; // Skip rendering if it's not our target group
 
+    if (std::find(excludedGroups.begin(), excludedGroups.end(), group) !=
+        excludedGroups.end())
+      continue; // Skip rendering if it's explicitly excluded
+
     tsf *synthToUse = channelSynths[ch];
     auto customIt = customSynths.find(group);
     if (customIt != customSynths.end() && customIt->second != nullptr) {
@@ -352,6 +356,11 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
   // Render separate Drum buses
   for (auto &pair : drumSynths) {
     auto group = pair.first;
+
+    if (std::find(excludedGroups.begin(), excludedGroups.end(), group) !=
+        excludedGroups.end())
+      continue;
+
     auto synthToUse = pair.second;
 
     auto customIt = customSynths.find(group);
@@ -431,7 +440,9 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
   // control changes for all channels to maintain sync with the MIDI stream, so
   // we only restrict note on/off.
   bool shouldPlayNotes =
-      !targetGroup.has_value() || targetGroup.value() == group;
+      (!targetGroup.has_value() || targetGroup.value() == group) &&
+      (std::find(excludedGroups.begin(), excludedGroups.end(), group) ==
+       excludedGroups.end());
 
   int transpose = 0;
   if (mixer != nullptr && !isDrumChannel[channel]) {

@@ -19,7 +19,7 @@ public:
     setResizable(false, false);
     setAlwaysOnTop(true);
 
-    centreWithSize(1380, 500);
+    centreWithSize(1350, 500);
   }
 
   MixerComponent &getMixerComponent() {

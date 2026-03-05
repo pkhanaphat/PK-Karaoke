@@ -127,6 +127,9 @@ public:
     g.setColour(juce::Colour(45, 45, 48));
     g.fillEllipse(r);
 
+    g.setColour(juce::Colour(90, 95, 105));
+    g.drawEllipse(r, 1.5f);
+
     float angle = startAngle + sliderPos * (endAngle - startAngle);
     juce::Point<float> p(
         cx + std::cos(angle - juce::MathConstants<float>::halfPi) * radius *

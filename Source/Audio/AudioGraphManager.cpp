@@ -1,6 +1,7 @@
 ﻿#include "Audio/AudioGraphManager.h"
 #include "Audio/tsf.h"
 #include "Core/MidiHelper.h"
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <memory>
 
 class MidiFilterProcessor : public juce::AudioProcessor {
@@ -395,13 +396,87 @@ void AudioGraphManager::openVstiPluginEditor(int slotIndex) {
 
 bool AudioGraphManager::loadVstFxPlugin(InstrumentGroup group, int slotIndex,
                                         const juce::String &pluginPath) {
-  // temporarily disabled since we are using a single synth graph
-  return false;
+  // 1. ค้นหา PluginDescription ตัวเต็มจาก KnownPluginList ของ PluginHost ก่อน
+  auto &knownList = pluginHost.getKnownPluginList();
+  juce::PluginDescription desc;
+  bool found = false;
+
+  for (int i = 0; i < knownList.getNumTypes(); ++i) {
+    if (auto *p = knownList.getType(i)) {
+      if (p->fileOrIdentifier == pluginPath) {
+        desc = *p;
+        found = true;
+        break;
+      }
+    }
+  }
+
+  if (!found) {
+    desc.fileOrIdentifier = pluginPath;
+    desc.pluginFormatName = "VST3";
+  }
+
+  juce::String errorMessage;
+  auto instance = pluginHost.getFormatManager().createPluginInstance(
+      desc, getSampleRate(), getBlockSize(), errorMessage);
+
+  if (!instance) {
+    DBG("AudioGraphManager::loadVstFxPlugin FAILED: " + errorMessage);
+    return false;
+  }
+
+  removeVstFxPlugin(group, slotIndex);
+
+  auto fxNode = mainGraph.addNode(std::move(instance));
+  fxNodes[group][slotIndex] = fxNode;
+
+  // Save state in MixerController
+  mixerController.setVstPluginPath(group, slotIndex, pluginPath);
+  mixerController.setVstPluginBypass(group, slotIndex, false);
+
+  rebuildGraphRouting();
+  return true;
 }
 
 void AudioGraphManager::removeVstFxPlugin(InstrumentGroup group,
                                           int slotIndex) {
-  // temporarily disabled since we are using a single synth graph
+  if (fxWindows[group][slotIndex] != nullptr) {
+    delete fxWindows[group][slotIndex].getComponent();
+  }
+
+  if (auto node = fxNodes[group][slotIndex]) {
+    mainGraph.removeNode(node.get());
+    fxNodes[group][slotIndex] = nullptr;
+  }
+
+  mixerController.setVstPluginPath(group, slotIndex, "");
+  rebuildGraphRouting();
+}
+
+void AudioGraphManager::openVstFxPluginEditor(InstrumentGroup group,
+                                              int slotIndex) {
+  auto node = fxNodes[group][slotIndex];
+  if (node == nullptr)
+    return;
+
+  auto *processor = node->getProcessor();
+  if (!processor)
+    return;
+
+  if (auto *editor = processor->createEditorIfNeeded()) {
+    if (fxWindows[group][slotIndex] != nullptr) {
+      delete fxWindows[group][slotIndex].getComponent();
+    }
+
+    auto *window = new PluginWindow(processor->getName(), editor);
+    fxWindows[group][slotIndex] = window;
+    window->setVisible(true);
+
+    juce::MessageManager::callAsync([window]() {
+      if (window != nullptr)
+        window->toFront(true);
+    });
+  }
 }
 
 void AudioGraphManager::setSoundFont(const juce::File &sf2File) {
@@ -582,36 +657,139 @@ void AudioGraphManager::rebuildGraphRouting() {
     }
   }
 
-  // 2. Route active channel (Simplified for Global Synth)
-  if (globalSynthNode != nullptr) {
-    int outChans = globalSynthNode->getProcessor()->getTotalNumOutputChannels();
-    for (int ch = 0; ch < juce::jmin(outChans, 2); ++ch) {
+  // 2. Clear old split nodes
+  for (auto &pair : splitSynthNodes) {
+    if (pair.second != nullptr) {
+      mainGraph.removeNode(pair.second.get());
+    }
+  }
+  splitSynthNodes.clear();
+
+  for (auto &pair : splitFilterNodes) {
+    if (pair.second != nullptr) {
+      mainGraph.removeNode(pair.second.get());
+    }
+  }
+  splitFilterNodes.clear();
+
+  // Find which InstrumentGroups need their own SF2Source (because they have FX)
+  std::vector<InstrumentGroup> splittedGroups;
+  for (int i = 0; i <= (int)InstrumentGroup::PercussionDrum; ++i) {
+    auto group = static_cast<InstrumentGroup>(i);
+    bool hasFx = false;
+    for (int slot = 0; slot < 4; ++slot) {
+      if (fxNodes[group][slot] != nullptr) {
+        hasFx = true;
+        break;
+      }
+    }
+
+    // Only split if routed to SF2 and has FX
+    if (hasFx && mixerController.getTrackOutputDestination(group) ==
+                     OutputDestination::SF2) {
+      splittedGroups.push_back(group);
+
+      // Create dedicated Filter & Synth for this group
+      auto filter = std::make_unique<MidiFilterProcessor>(
+          mixerController, OutputDestination::SF2);
+      auto synth = std::make_unique<SF2Source>(&mixerController, group);
+
+      // Initialize the specific synth with the current SoundFont
+      if (currentSoundFont.existsAsFile()) {
+        synth->loadSoundFont(
+            currentSoundFont,
+            getSharedSoundFont(currentSoundFont.getFullPathName()));
+      }
+
+      auto filterNode = mainGraph.addNode(std::move(filter));
+      auto synthNode = mainGraph.addNode(std::move(synth));
+
+      splitFilterNodes[group] = filterNode;
+      splitSynthNodes[group] = synthNode;
+
+      // Connect MIDI Input -> Group Filter -> Group Synth
       mainGraph.addConnection(
-          {{globalSynthNode->nodeID, ch}, {audioOutputNode->nodeID, ch}});
+          {{midiInputNode->nodeID, juce::AudioProcessorGraph::midiChannelIndex},
+           {filterNode->nodeID, juce::AudioProcessorGraph::midiChannelIndex}});
+      mainGraph.addConnection(
+          {{filterNode->nodeID, juce::AudioProcessorGraph::midiChannelIndex},
+           {synthNode->nodeID, juce::AudioProcessorGraph::midiChannelIndex}});
     }
   }
 
+  // Helper lambda to route an audio node chain
+  auto connectAudioChain = [&](Node::Ptr srcNode, InstrumentGroup group,
+                               Node::Ptr destNode) {
+    if (srcNode == nullptr || destNode == nullptr)
+      return;
+
+    Node::Ptr currentNode = srcNode;
+
+    // Route through FX slots 0..3
+    for (int slot = 0; slot < 4; ++slot) {
+      if (auto fxNode = fxNodes[group][slot]) {
+        // Assume stereo for simplicity
+        for (int ch = 0;
+             ch < juce::jmin(
+                      currentNode->getProcessor()->getTotalNumOutputChannels(),
+                      fxNode->getProcessor()->getTotalNumInputChannels());
+             ++ch) {
+          mainGraph.addConnection(
+              {{currentNode->nodeID, ch}, {fxNode->nodeID, ch}});
+        }
+        currentNode = fxNode;
+      }
+    }
+
+    // Connect last node to destination
+    for (int ch = 0;
+         ch <
+         juce::jmin(currentNode->getProcessor()->getTotalNumOutputChannels(),
+                    destNode->getProcessor()->getTotalNumInputChannels());
+         ++ch) {
+      mainGraph.addConnection(
+          {{currentNode->nodeID, ch}, {destNode->nodeID, ch}});
+    }
+  };
+
+  // 3. Route Global Synth (for non-FX tracks)
+  if (globalSynthNode != nullptr) {
+    if (auto *sf2Source =
+            dynamic_cast<SF2Source *>(globalSynthNode->getProcessor())) {
+      sf2Source->setExcludedGroups(splittedGroups);
+    }
+    connectAudioChain(globalSynthNode, InstrumentGroup::MasterBus,
+                      audioOutputNode); // Master FX later
+  }
+
+  // 4. Route Split Synths
+  for (auto group : splittedGroups) {
+    if (auto synthNode = splitSynthNodes[group]) {
+      connectAudioChain(synthNode, group, audioOutputNode);
+    }
+  }
+
+  // 5. Route VSTi Nodes
   for (auto &pair : vstiNodes) {
     int slot = pair.first;
     if (pair.second == nullptr)
       continue;
 
-    int outChans = pair.second->getProcessor()->getTotalNumOutputChannels();
+    auto vstiGroup = static_cast<InstrumentGroup>(
+        static_cast<int>(InstrumentGroup::VSTi1) + slot);
+    auto destNode =
+        vstiGainNodes[slot] != nullptr ? vstiGainNodes[slot] : audioOutputNode;
 
-    // 3. Connect VSTi Node -> VstiGainNode -> AudioOutputNode
-    auto &gainNode = vstiGainNodes[slot];
-    if (gainNode != nullptr) {
-      for (int ch = 0; ch < juce::jmin(outChans, 2); ++ch) {
+    connectAudioChain(pair.second, vstiGroup, destNode);
+
+    if (destNode != audioOutputNode) {
+      // Connect Gain Node to Output
+      for (int ch = 0;
+           ch <
+           juce::jmin(destNode->getProcessor()->getTotalNumOutputChannels(), 2);
+           ++ch) {
         mainGraph.addConnection(
-            {{pair.second->nodeID, ch}, {gainNode->nodeID, ch}});
-        mainGraph.addConnection(
-            {{gainNode->nodeID, ch}, {audioOutputNode->nodeID, ch}});
-      }
-    } else {
-      // Fallback if gain node is missing for some reason
-      for (int ch = 0; ch < juce::jmin(outChans, 2); ++ch) {
-        mainGraph.addConnection(
-            {{pair.second->nodeID, ch}, {audioOutputNode->nodeID, ch}});
+            {{destNode->nodeID, ch}, {audioOutputNode->nodeID, ch}});
       }
     }
   }

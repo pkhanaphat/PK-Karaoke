@@ -209,6 +209,7 @@ private:
 //==============================================================================
 class FXStripComponent : public juce::Component,
                          public juce::Slider::Listener,
+                         public juce::Button::Listener,
                          public juce::Timer {
 public:
   FXStripComponent(MixerController &mc, AudioGraphManager &agm,
@@ -220,6 +221,7 @@ public:
   void resized() override;
   void timerCallback() override;
   void sliderValueChanged(juce::Slider *slider) override;
+  void buttonClicked(juce::Button *button) override;
 
   void setExpanded(bool expanded);
 
@@ -288,6 +290,8 @@ private:
   juce::Image pluginIcon;
   juce::Rectangle<int> iconBounds;
 
+  std::unique_ptr<juce::FileChooser> pluginChooser;
+
   void loadIcon();
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VstiStripComponent)
@@ -298,6 +302,7 @@ private:
 //==============================================================================
 class MasterStripComponent : public juce::Component,
                              public juce::Slider::Listener,
+                             public juce::Button::Listener,
                              public juce::Timer {
 public:
   MasterStripComponent(MixerController &mc, AudioGraphManager &agm);
@@ -308,6 +313,7 @@ public:
   void resized() override;
   void timerCallback() override;
   void sliderValueChanged(juce::Slider *slider) override;
+  void buttonClicked(juce::Button *button) override;
 
   void setExpanded(bool expanded);
 
