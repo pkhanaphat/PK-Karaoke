@@ -52,6 +52,7 @@ bool MidiPlayer::loadMidiFile(const juce::File &file) {
       currentPositionSeconds = 0.0;
       nextEventIndex = 0;
       playing = false;
+      reachedEnd = false;
 
       return true;
     }
@@ -66,6 +67,7 @@ void MidiPlayer::setPosition(double timeInSeconds) {
 
   // Find the next event index based on the new time
   nextEventIndex = midiSequence.getNextIndexAtTime(currentPositionSeconds);
+  reachedEnd = false;
 }
 
 double MidiPlayer::getPosition() const { return currentPositionSeconds; }
@@ -110,13 +112,17 @@ int MidiPlayer::getPositionTicks() const {
 
 double MidiPlayer::getDuration() const { return durationSeconds; }
 
-void MidiPlayer::play() { playing = true; }
+void MidiPlayer::play() {
+  playing = true;
+  reachedEnd = false;
+}
 
 void MidiPlayer::pause() { playing = false; }
 
 void MidiPlayer::stop() {
   const juce::ScopedLock sl(lock);
   playing = false;
+  reachedEnd = false;
   currentPositionSeconds = 0.0;
   nextEventIndex = 0;
 }
@@ -164,5 +170,6 @@ void MidiPlayer::getNextAudioBlock(juce::MidiBuffer &outputBuffer,
     DBG("MidiPlayer: Reached end of duration (" << durationSeconds
                                                 << "s). Stopping playback.");
     playing = false; // Finished playback
+    reachedEnd = true;
   }
 }

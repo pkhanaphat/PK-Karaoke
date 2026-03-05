@@ -14,11 +14,14 @@ static void LOG_CRASH(const juce::String &msg) {
 
 SF2Source::SF2Source(MixerController *mixerController,
                      std::optional<InstrumentGroup> group)
-    : AudioProcessor(BusesProperties().withOutput(
-          "Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor(
+          BusesProperties()
+              .withOutput("Output", juce::AudioChannelSet::stereo(), true)
+              .withOutput("FX1", juce::AudioChannelSet::stereo(), true)
+              .withOutput("FX2", juce::AudioChannelSet::stereo(), true)
+              .withOutput("FX3", juce::AudioChannelSet::stereo(), true)),
       mixer(mixerController), targetGroup(group) {
   for (int i = 0; i < 16; ++i) {
-    channelSynths[i] = nullptr;
     channelPrograms[i] = 0;
     isDrumChannel[i] = (i == 9);
   }
@@ -35,18 +38,20 @@ void SF2Source::freeSynths() {
     tsf_close(mainSynth);
     mainSynth = nullptr;
   }
-  for (int i = 0; i < 16; ++i) {
-    if (channelSynths[i] != nullptr) {
-      tsf_close(channelSynths[i]);
-      channelSynths[i] = nullptr;
-    }
-  }
-  for (auto &pair : drumSynths) {
+  for (auto &pair : activeSynths) {
     if (pair.second != nullptr) {
       tsf_close(pair.second);
     }
   }
-  drumSynths.clear();
+  activeSynths.clear();
+  // customSynths are managed by updateCustomSF2Routing currently, but they
+  // should also be freed here
+  for (auto &pair : customSynths) {
+    if (pair.second != nullptr) {
+      tsf_close(pair.second);
+    }
+  }
+  customSynths.clear();
   LOG_CRASH("freeSynths: End");
 }
 
@@ -69,29 +74,10 @@ bool SF2Source::loadSoundFont(const juce::File &sf2File, tsf *sharedSynth) {
       loadedPath = sf2File.getFullPathName();
       tsf_set_output(mainSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,
                      0.0f);
-      for (int i = 0; i < 16; ++i) {
-        channelSynths[i] = tsf_copy(mainSynth);
-        tsf_set_output(channelSynths[i], TSF_STEREO_INTERLEAVED,
-                       (int)currentSampleRate, 0.0f);
-      }
+      tsf_set_volume(mainSynth, currentVolume);
 
-      // Initialize separate synths for each drum group
-      std::vector<InstrumentGroup> drumGroups = {
-          InstrumentGroup::Kick,        InstrumentGroup::Snare,
-          InstrumentGroup::HiHat,       InstrumentGroup::HiTom,
-          InstrumentGroup::MidTom,      InstrumentGroup::LowTom,
-          InstrumentGroup::CrashCymbal, InstrumentGroup::RideCymbal,
-          InstrumentGroup::HandClap,    InstrumentGroup::Tambourine,
-          InstrumentGroup::Cowbell,     InstrumentGroup::Bongo,
-          InstrumentGroup::Conga,       InstrumentGroup::Timbale,
-          InstrumentGroup::ThaiChing,   InstrumentGroup::PercussionDrum};
-      for (auto group : drumGroups) {
-        if (!targetGroup.has_value() || targetGroup.value() == group) {
-          drumSynths[group] = tsf_copy(mainSynth);
-          tsf_set_output(drumSynths[group], TSF_STEREO_INTERLEAVED,
-                         (int)currentSampleRate, 0.0f);
-        }
-      }
+      // We no longer pre-allocate channel arrays or drum synths here.
+      // They will be created dynamically on note-on events!
 
       DBG("SF2Source: Loaded " + sf2File.getFullPathName());
       LOG_CRASH("loadSoundFont: End Success");
@@ -172,13 +158,7 @@ void SF2Source::prepareToPlay(double sampleRate, int samplesPerBlock) {
   if (mainSynth != nullptr) {
     tsf_set_output(mainSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,
                    0.0f);
-    for (int i = 0; i < 16; ++i) {
-      if (channelSynths[i] != nullptr) {
-        tsf_set_output(channelSynths[i], TSF_STEREO_INTERLEAVED,
-                       (int)currentSampleRate, 0.0f);
-      }
-    }
-    for (auto &pair : drumSynths) {
+    for (auto &pair : activeSynths) {
       if (pair.second != nullptr) {
         tsf_set_output(pair.second, TSF_STEREO_INTERLEAVED,
                        (int)currentSampleRate, 0.0f);
@@ -203,12 +183,7 @@ void SF2Source::setSFVolume(float linearGain) {
   currentVolume = linearGain;
   if (mainSynth != nullptr) {
     tsf_set_volume(mainSynth, currentVolume);
-    for (int i = 0; i < 16; ++i) {
-      if (channelSynths[i] != nullptr) {
-        tsf_set_volume(channelSynths[i], currentVolume);
-      }
-    }
-    for (auto &pair : drumSynths) {
+    for (auto &pair : activeSynths) {
       if (pair.second != nullptr) {
         tsf_set_volume(pair.second, currentVolume);
       }
@@ -222,19 +197,11 @@ void SF2Source::processBlock(juce::AudioBuffer<float> &buffer,
   juce::ScopedNoDenormals noDenormals;
   const juce::ScopedLock sl(lock);
 
+  // Only process if mainSynth exists
   if (mainSynth == nullptr) {
     buffer.clear();
     LOG_CRASH("processBlock: End (No Synth)");
     return;
-  }
-
-  // Double check that our internal arrays are not partially initialized during
-  // a race
-  for (int i = 0; i < 16; ++i) {
-    if (channelSynths[i] == nullptr) {
-      buffer.clear();
-      return;
-    }
   }
 
   const int numSamples = buffer.getNumSamples();
@@ -274,11 +241,24 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
   float *interleaved = interleavedBuffer.get();
   std::map<InstrumentGroup, std::pair<float, float>> groupPeaks;
 
-  for (int ch = 0; ch < 16; ++ch) {
-    if (isDrumChannel[ch] || channelSynths[ch] == nullptr)
-      continue;
+  // Render from all actively playing dynamic synths + custom synths
+  std::vector<InstrumentGroup> groupsToRender;
+  for (const auto &pair : activeSynths) {
+    if (pair.second != nullptr &&
+        std::find(groupsToRender.begin(), groupsToRender.end(), pair.first) ==
+            groupsToRender.end()) {
+      groupsToRender.push_back(pair.first);
+    }
+  }
+  for (const auto &pair : customSynths) {
+    if (pair.second != nullptr &&
+        std::find(groupsToRender.begin(), groupsToRender.end(), pair.first) ==
+            groupsToRender.end()) {
+      groupsToRender.push_back(pair.first);
+    }
+  }
 
-    InstrumentGroup group = MidiHelper::getInstrumentType(channelPrograms[ch]);
+  for (auto group : groupsToRender) {
     if (targetGroup.has_value() && targetGroup.value() != group)
       continue; // Skip rendering if it's not our target group
 
@@ -286,102 +266,43 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
         excludedGroups.end())
       continue; // Skip rendering if it's explicitly excluded
 
-    tsf *synthToUse = channelSynths[ch];
+    tsf *synthToUse = nullptr;
     auto customIt = customSynths.find(group);
     if (customIt != customSynths.end() && customIt->second != nullptr) {
       synthToUse = customIt->second;
-    }
-
-    if (synthToUse == nullptr) {
-      LOG_CRASH("SF2Source: synthToUse is nullptr for channel " +
-                juce::String(ch));
-      continue;
-    }
-
-    tsf_render_float(synthToUse, interleaved, numSamples, 0);
-
-    float vol = currentVolume;
-    float pan = 0.5f;
-
-    if (mixer != nullptr) {
-      if (!mixer->isTrackPlaying(group))
-        vol = 0.0f;
-      else
-        vol *= mixer->getTrackVolume(group);
-      pan = mixer->getTrackPan(group);
-    }
-
-    // Calculate peak magnitude for VU Meter AFTER volume scaling and panning
-    float peakL = 0.0f;
-    float peakR = 0.0f;
-
-    if (vol > 0.001f) {
-      const float leftGain = vol * juce::jmin(1.0f, (1.0f - pan) * 2.0f);
-      const float rightGain = vol * juce::jmin(1.0f, pan * 2.0f);
-
-      auto *mixL = dest.getWritePointer(0, startSample);
-      auto *mixR = dest.getWritePointer(1, startSample);
-
-      bool hasAudio = false;
-      for (int i = 0; i < numSamples; ++i) {
-        float sampleL = interleaved[i * 2] * leftGain;
-        float sampleR = interleaved[i * 2 + 1] * rightGain;
-
-        mixL[i] += sampleL;
-        mixR[i] += sampleR;
-
-        if (std::abs(sampleL) > peakL)
-          peakL = std::abs(sampleL);
-        if (std::abs(sampleR) > peakR)
-          peakR = std::abs(sampleR);
-
-        if (std::abs(sampleL) > 0.0001f || std::abs(sampleR) > 0.0001f)
-          hasAudio = true;
+    } else {
+      auto activeIt = activeSynths.find(group);
+      if (activeIt != activeSynths.end() && activeIt->second != nullptr) {
+        synthToUse = activeIt->second;
       }
-
-      static int audioPulseCount = 0;
-      if (hasAudio) {
-        if (++audioPulseCount % 50 == 0)
-          LOG_CRASH("SF2Source: Rendered AUDIO data for channel " +
-                    juce::String(ch) + " vol: " + juce::String(vol) +
-                    " leftGain: " + juce::String(leftGain) +
-                    " rightGain: " + juce::String(rightGain));
-      }
-    }
-
-    groupPeaks[group].first = std::max(groupPeaks[group].first, peakL);
-    groupPeaks[group].second = std::max(groupPeaks[group].second, peakR);
-  }
-
-  // Render separate Drum buses
-  for (auto &pair : drumSynths) {
-    auto group = pair.first;
-
-    if (std::find(excludedGroups.begin(), excludedGroups.end(), group) !=
-        excludedGroups.end())
-      continue;
-
-    auto synthToUse = pair.second;
-
-    auto customIt = customSynths.find(group);
-    if (customIt != customSynths.end() && customIt->second != nullptr) {
-      synthToUse = customIt->second;
     }
 
     if (synthToUse == nullptr)
       continue;
 
+    // Clear interleaved buffer to prevent old audio from being mixed again
+    // (fixes phantom Chorus/FX)
+    std::fill(interleaved, interleaved + (numSamples * 2), 0.0f);
+
     tsf_render_float(synthToUse, interleaved, numSamples, 0);
 
     float vol = currentVolume;
     float pan = 0.5f;
 
     if (mixer != nullptr) {
-      if (!mixer->isTrackPlaying(group))
-        vol = 0.0f;
-      else
-        vol *= mixer->getTrackVolume(group);
-      pan = mixer->getTrackPan(group);
+      if (!targetGroup.has_value()) {
+        // Global Synth Mode: Use mixer values per group
+        if (!mixer->isTrackPlaying(group))
+          vol = 0.0f;
+        else
+          vol *= mixer->getTrackVolume(group);
+        pan = mixer->getTrackPan(group);
+      } else {
+        // Split Synth Mode: Output raw audio at unity (TrackProcessor handles
+        // Vol/Pan later)
+        vol = currentVolume;
+        pan = 0.5f;
+      }
     }
 
     // Calculate peak magnitude for VU Meter AFTER volume scaling and panning
@@ -395,6 +316,18 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
       auto *mixL = dest.getWritePointer(0, startSample);
       auto *mixR = dest.getWritePointer(1, startSample);
 
+      // Get Aux Sends (Only for Global Synth mode)
+      float sends[3] = {0.0f, 0.0f, 0.0f};
+      bool shouldMixSendsInternally = !targetGroup.has_value();
+
+      if (shouldMixSendsInternally && mixer != nullptr) {
+        for (int i = 0; i < 3; ++i) {
+          sends[i] = mixer->getTrackAuxSendBypass(group, i)
+                         ? 0.0f
+                         : mixer->getTrackAuxSend(group, i);
+        }
+      }
+
       for (int i = 0; i < numSamples; ++i) {
         float sampleL = interleaved[i * 2] * leftGain;
         float sampleR = interleaved[i * 2 + 1] * rightGain;
@@ -402,12 +335,37 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
         mixL[i] += sampleL;
         mixR[i] += sampleR;
 
+        // Mix to Aux Sends (FX1=ch2/3, FX2=ch4/5, FX3=ch6/7)
+        if (shouldMixSendsInternally) {
+          for (int auxIdx = 0; auxIdx < 3; ++auxIdx) {
+            float sendVol = sends[auxIdx];
+            if (sendVol > 0.001f) {
+              int outChL = 2 + (auxIdx * 2);
+              int outChR = outChL + 1;
+              if (dest.getNumChannels() >= outChR + 1) {
+                dest.getWritePointer(outChL, startSample)[i] +=
+                    sampleL * sendVol;
+                dest.getWritePointer(outChR, startSample)[i] +=
+                    sampleR * sendVol;
+              }
+            }
+          }
+        }
+
         if (std::abs(sampleL) > peakL)
           peakL = std::abs(sampleL);
         if (std::abs(sampleR) > peakR)
           peakR = std::abs(sampleR);
       }
+    } else {
+      // If volume is 0, ensure aux channels are cleared if this is global mode
+      if (!targetGroup.has_value()) {
+        for (int ch = 2; ch < dest.getNumChannels(); ++ch) {
+          dest.clear(ch, startSample, numSamples);
+        }
+      }
     }
+
     groupPeaks[group].first = std::max(groupPeaks[group].first, peakL);
     groupPeaks[group].second = std::max(groupPeaks[group].second, peakR);
   }
@@ -419,26 +377,65 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
   }
 }
 
+tsf *SF2Source::getOrCreateSynthForGroup(InstrumentGroup group,
+                                         tsf *sharedFontToCopyFrom) {
+  if (sharedFontToCopyFrom == nullptr)
+    return nullptr;
+
+  // Check custom first
+  auto customIt = customSynths.find(group);
+  if (customIt != customSynths.end() && customIt->second != nullptr) {
+    return customIt->second;
+  }
+
+  // Check active
+  auto activeIt = activeSynths.find(group);
+  if (activeIt != activeSynths.end() && activeIt->second != nullptr) {
+    return activeIt->second;
+  }
+
+  // Create new dynamically
+  tsf *newSynth = tsf_copy(sharedFontToCopyFrom);
+  if (newSynth != nullptr) {
+    tsf_set_output(newSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,
+                   0.0f);
+    tsf_set_volume(newSynth, currentVolume);
+
+    // Sync channel programs
+    for (int ch = 0; ch < 16; ++ch) {
+      tsf_channel_set_presetnumber(newSynth, ch, channelPrograms[ch],
+                                   (ch == 9) ? 1 : 0);
+    }
+
+    activeSynths[group] = newSynth;
+    LOG_CRASH("SF2Source: Dynamically created synth for InstrumentGroup " +
+              juce::String((int)group));
+    return newSynth;
+  }
+  return nullptr;
+}
+
 void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
   const int channel = msg.getChannel() - 1;
   if (channel < 0 || channel >= 16)
     return;
 
-  tsf *synth =
-      channelSynths[channel] != nullptr ? channelSynths[channel] : mainSynth;
-  if (synth == nullptr)
+  if (mainSynth == nullptr)
     return;
 
   InstrumentGroup group =
       MidiHelper::getInstrumentType(channelPrograms[channel]);
-  if (isDrumChannel[channel]) {
+  if (isDrumChannel[channel] && msg.isNoteOnOrOff()) {
     group = MidiHelper::getInstrumentDrumType(msg.getNoteNumber());
+  } else if (isDrumChannel[channel]) {
+    // General drum channel message (CC, pitch) - apply to PercussionDrum by
+    // default, though typically we broadcast these to all active drum synths
+    // below.
+    group = InstrumentGroup::PercussionDrum;
   }
 
-  // If this synth instance is restricted to a specific group, ignore messages
-  // for other groups However, we still need to process program changes and
-  // control changes for all channels to maintain sync with the MIDI stream, so
-  // we only restrict note on/off.
+  // If this synth instance is restricted to a specific group, ignore note
+  // messages for other groups
   bool shouldPlayNotes =
       (!targetGroup.has_value() || targetGroup.value() == group) &&
       (std::find(excludedGroups.begin(), excludedGroups.end(), group) ==
@@ -451,88 +448,80 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
 
   if (msg.isNoteOn()) {
     float velocity = msg.getFloatVelocity();
-
-    // Determine which synth instance to use
-    bool usedCustom = false;
-    auto customIt = customSynths.find(group);
-    if (customIt != customSynths.end() && customIt->second != nullptr) {
-      synth = customIt->second;
-      usedCustom = true;
-    } else if (isDrumChannel[channel]) {
-      auto it = drumSynths.find(group);
-      if (it != drumSynths.end() && it->second != nullptr) {
-        synth = it->second;
-      }
-    }
+    tsf *synth = getOrCreateSynthForGroup(group, mainSynth);
 
     // Only play if not fully muted and matches target group
-    if (velocity > 0.001f && shouldPlayNotes) {
-      static int noteCount = 0;
-      if (++noteCount % 10 == 0)
-        LOG_CRASH("SF2Source: Note ON channel " + juce::String(channel) +
-                  " note " + juce::String(msg.getNoteNumber()) + " vol " +
-                  juce::String(currentVolume));
+    if (synth != nullptr && velocity > 0.001f && shouldPlayNotes) {
       tsf_channel_note_on(synth, channel,
                           juce::jlimit(0, 127, msg.getNoteNumber() + transpose),
                           juce::jlimit(0.0f, 1.0f, velocity));
     }
   } else if (msg.isNoteOff()) {
-    bool usedCustom = false;
-    auto customIt = customSynths.find(group);
-    if (customIt != customSynths.end() && customIt->second != nullptr) {
-      synth = customIt->second;
-      usedCustom = true;
-    } else if (isDrumChannel[channel]) {
-      auto it = drumSynths.find(group);
-      if (it != drumSynths.end() && it->second != nullptr) {
-        synth = it->second;
+    // Broadcast NoteOff to ALL synths to prevent hanging notes if a Program
+    // Change occurred while the note was held (which changes the 'group'
+    // routing).
+    for (auto &pair : activeSynths) {
+      if (pair.second != nullptr) {
+        if (!targetGroup.has_value() || targetGroup.value() == pair.first) {
+          int t = (mixer != nullptr && !isDrumChannel[channel])
+                      ? mixer->getTrackTranspose(pair.first)
+                      : 0;
+          tsf_channel_note_off(pair.second, channel,
+                               juce::jlimit(0, 127, msg.getNoteNumber() + t));
+        }
       }
     }
-
-    if (shouldPlayNotes) {
-      tsf_channel_note_off(
-          synth, channel,
-          juce::jlimit(0, 127, msg.getNoteNumber() + transpose));
+    for (auto &pair : customSynths) {
+      if (pair.second != nullptr) {
+        if (!targetGroup.has_value() || targetGroup.value() == pair.first) {
+          int t = (mixer != nullptr && !isDrumChannel[channel])
+                      ? mixer->getTrackTranspose(pair.first)
+                      : 0;
+          tsf_channel_note_off(pair.second, channel,
+                               juce::jlimit(0, 127, msg.getNoteNumber() + t));
+        }
+      }
     }
   } else if (msg.isProgramChange()) {
     const int prog = msg.getProgramChangeNumber();
     channelPrograms[channel] = prog;
-    tsf_channel_set_presetnumber(synth, channel, prog, (channel == 9));
 
-    if (isDrumChannel[channel]) {
-      for (auto &pair : drumSynths) {
-        tsf_channel_set_presetnumber(pair.second, channel, prog, 1);
-      }
+    // Broadcast program change to all synths so they stay in sync
+    for (auto &pair : activeSynths) {
+      if (pair.second != nullptr)
+        tsf_channel_set_presetnumber(pair.second, channel, prog,
+                                     (channel == 9));
     }
     for (auto &pair : customSynths) {
-      tsf_channel_set_presetnumber(pair.second, channel, prog,
-                                   isDrumChannel[channel] ? 1 : 0);
+      if (pair.second != nullptr)
+        tsf_channel_set_presetnumber(pair.second, channel, prog,
+                                     (channel == 9));
     }
   } else if (msg.isPitchWheel()) {
-    tsf_channel_set_pitchwheel(synth, channel, msg.getPitchWheelValue());
-    if (isDrumChannel[channel]) {
-      for (auto &pair : drumSynths) {
+    // Broadcast to all synths
+    for (auto &pair : activeSynths) {
+      if (pair.second != nullptr)
         tsf_channel_set_pitchwheel(pair.second, channel,
                                    msg.getPitchWheelValue());
-      }
     }
     for (auto &pair : customSynths) {
-      tsf_channel_set_pitchwheel(pair.second, channel,
-                                 msg.getPitchWheelValue());
+      if (pair.second != nullptr)
+        tsf_channel_set_pitchwheel(pair.second, channel,
+                                   msg.getPitchWheelValue());
     }
   } else if (msg.isController()) {
-    tsf_channel_midi_control(synth, channel, msg.getControllerNumber(),
-                             msg.getControllerValue());
-    if (isDrumChannel[channel]) {
-      for (auto &pair : drumSynths) {
+    // Broadcast to all synths
+    for (auto &pair : activeSynths) {
+      if (pair.second != nullptr)
         tsf_channel_midi_control(pair.second, channel,
                                  msg.getControllerNumber(),
                                  msg.getControllerValue());
-      }
     }
     for (auto &pair : customSynths) {
-      tsf_channel_midi_control(pair.second, channel, msg.getControllerNumber(),
-                               msg.getControllerValue());
+      if (pair.second != nullptr)
+        tsf_channel_midi_control(pair.second, channel,
+                                 msg.getControllerNumber(),
+                                 msg.getControllerValue());
     }
   }
 }

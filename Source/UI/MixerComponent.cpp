@@ -19,8 +19,24 @@ void populatePluginMenu(
   std::map<juce::String, std::vector<juce::PluginDescription>> categories;
   for (int i = 0; i < knownList.getNumTypes(); ++i) {
     if (auto *desc = knownList.getType(i)) {
+      if (desc->isInstrument)
+        continue; // Only show FX, not VSTi instruments
+
       juce::String category =
           desc->category.isNotEmpty() ? desc->category : "Other";
+
+      // Remove "Fx|" or "Fx" prefix from category name
+      if (category.startsWithIgnoreCase("Fx|")) {
+        category = category.substring(3).trim();
+      } else if (category.startsWithIgnoreCase("Fx ")) {
+        category = category.substring(3).trim();
+      } else if (category.equalsIgnoreCase("Fx")) {
+        category = "Other";
+      }
+
+      if (category.isEmpty())
+        category = "Other";
+
       categories[category].push_back(*desc);
     }
   }
@@ -124,6 +140,8 @@ ChannelStripComponent::ChannelStripComponent(MixerController &mc,
     auxSends[i].setRange(0.0, 1.0, 0.01);
     auxSends[i].setValue(0.0, juce::dontSendNotification);
     auxSends[i].addListener(this);
+    auxSends[i].addMouseListener(this,
+                                 true); // Use true to capture child events
     addAndMakeVisible(auxSends[i]);
   }
 
@@ -165,9 +183,20 @@ void ChannelStripComponent::updateStateFromController() {
   soloButton.setToggleState(mixerController.isTrackSolo(trackGroup),
                             juce::dontSendNotification);
 
-  for (int i = 0; i < 3; ++i)
+  for (int i = 0; i < 3; ++i) {
     auxSends[i].setValue(mixerController.getTrackAuxSend(trackGroup, i),
                          juce::dontSendNotification);
+
+    bool isBypassed = mixerController.getTrackAuxSendBypass(trackGroup, i);
+    auxSends[i].setColour(juce::Slider::rotarySliderOutlineColourId,
+                          isBypassed ? juce::Colours::grey
+                                     : juce::Colours::white);
+    auxSends[i].setColour(juce::Slider::rotarySliderFillColourId,
+                          isBypassed ? juce::Colours::grey
+                                     : juce::Colour(0xff4a90e2));
+    auxSends[i].setTooltip(isBypassed ? "Bypassed (Right-click to enable)"
+                                      : "Right-click to bypass");
+  }
 
   for (int i = 0; i < 4; ++i) {
 
@@ -175,8 +204,10 @@ void ChannelStripComponent::updateStateFromController() {
     if (path.isNotEmpty()) {
       bool bypass = mixerController.getVstPluginBypass(trackGroup, i);
       insertSlots[i].setButtonText(
-          bypass ? "[B] " + juce::File(path).getFileNameWithoutExtension()
-                 : juce::File(path).getFileNameWithoutExtension());
+          juce::File(path).getFileNameWithoutExtension());
+      insertSlots[i].setColour(juce::TextButton::textColourOffId,
+                               bypass ? juce::Colours::grey
+                                      : juce::Colours::white);
     } else {
       insertSlots[i].setButtonText("+");
     }
@@ -210,6 +241,20 @@ void ChannelStripComponent::sliderValueChanged(juce::Slider *s) {
       if (s == &auxSends[i])
         mixerController.setTrackAuxSend(trackGroup, i,
                                         (float)auxSends[i].getValue());
+}
+
+void ChannelStripComponent::mouseDown(const juce::MouseEvent &event) {
+  if (event.mods.isPopupMenu()) {
+    for (int i = 0; i < 3; ++i) {
+      if (event.eventComponent == &auxSends[i] ||
+          auxSends[i].isParentOf(event.eventComponent)) {
+        bool isBypassed = mixerController.getTrackAuxSendBypass(trackGroup, i);
+        mixerController.setTrackAuxSendBypass(trackGroup, i, !isBypassed);
+        updateStateFromController();
+        return;
+      }
+    }
+  }
 }
 
 void ChannelStripComponent::buttonClicked(juce::Button *b) {
@@ -1071,6 +1116,8 @@ VstiStripComponent::VstiStripComponent(MixerController &mc,
     auxSends[i].setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     auxSends[i].setRange(0.0, 1.0, 0.01);
     auxSends[i].setValue(0.0, juce::dontSendNotification);
+    auxSends[i].addMouseListener(this,
+                                 true); // Added listener for right-click bypass
     addAndMakeVisible(auxSends[i]);
   }
 
@@ -1278,6 +1325,23 @@ void VstiStripComponent::buttonClicked(juce::Button *b) {
     mixer->updateAllStrips();
 }
 
+void VstiStripComponent::mouseDown(const juce::MouseEvent &event) {
+  auto vstiGroup = static_cast<InstrumentGroup>(
+      static_cast<int>(InstrumentGroup::VSTi1) + slotIndex);
+
+  if (event.mods.isPopupMenu()) {
+    for (int i = 0; i < 3; ++i) {
+      if (event.eventComponent == &auxSends[i] ||
+          auxSends[i].isParentOf(event.eventComponent)) {
+        bool isBypassed = mixerController.getTrackAuxSendBypass(vstiGroup, i);
+        mixerController.setTrackAuxSendBypass(vstiGroup, i, !isBypassed);
+        updateStateFromController();
+        return;
+      }
+    }
+  }
+}
+
 void VstiStripComponent::setExpanded(bool expanded) {
   isExpanded = expanded;
   gainKnob.setVisible(expanded);
@@ -1299,6 +1363,21 @@ void VstiStripComponent::updateStateFromController() {
                             juce::dontSendNotification);
   gainKnob.setValue(mixerController.getTrackGain(vstiGroup),
                     juce::dontSendNotification);
+
+  for (int i = 0; i < 3; ++i) {
+    auxSends[i].setValue(mixerController.getTrackAuxSend(vstiGroup, i),
+                         juce::dontSendNotification);
+
+    bool isBypassed = mixerController.getTrackAuxSendBypass(vstiGroup, i);
+    auxSends[i].setColour(juce::Slider::rotarySliderOutlineColourId,
+                          isBypassed ? juce::Colours::grey
+                                     : juce::Colours::white);
+    auxSends[i].setColour(juce::Slider::rotarySliderFillColourId,
+                          isBypassed ? juce::Colours::grey
+                                     : juce::Colour(0xff4a90e2));
+    auxSends[i].setTooltip(isBypassed ? "Bypassed (Right-click to enable)"
+                                      : "Right-click to bypass");
+  }
 
   for (int i = 0; i < 4; ++i) {
     auto path = mixerController.getVstPluginPath(vstiGroup, i);

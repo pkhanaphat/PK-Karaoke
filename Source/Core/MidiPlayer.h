@@ -30,6 +30,8 @@ public:
   void pause();
   void stop();
   bool isPlaying() const;
+  bool hasFinishedPlayback() const { return reachedEnd; }
+  void clearFinishedPlayback() { reachedEnd = false; }
   int getNumEvents() const { return midiSequence.getNumEvents(); }
 
 private:
@@ -42,6 +44,7 @@ private:
   int durationTicks = 0;
   short midiResolution = 0;
   bool playing = false;
+  bool reachedEnd = false;
 
   // For tracking which events have been played
   int nextEventIndex = 0;

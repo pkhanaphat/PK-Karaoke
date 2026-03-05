@@ -5,7 +5,6 @@
 #include "Core/Routing/MixerController.h"
 #include <JuceHeader.h>
 
-
 class SoundFontSynth : public juce::AudioProcessor {
 public:
   SoundFontSynth(MixerController *mixerController = nullptr);
@@ -45,14 +44,12 @@ public:
 
 private:
   tsf *mainSynth = nullptr;
-  tsf *channelSynths[16] = {nullptr}; // One synth per MIDI channel
-
   int channelPrograms[16] = {0}; // Track active program per channel
   bool isDrumChannel[16] = {false};
 
   MixerController *mixer = nullptr;
   float currentVolume = 1.0f;
-  juce::CriticalSection lock;
+  juce::SpinLock lock;
   double currentSampleRate = 44100.0;
   juce::HeapBlock<float> interleavedBuffer;
   int maxSamplesPerBlock = 1024;
@@ -61,4 +58,3 @@ private:
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SoundFontSynth)
 };
-

@@ -108,8 +108,17 @@ private:
   Node::Ptr globalSynthNode;
   Node::Ptr globalFilterNode;
 
-  // VSTi Gain nodes for mixing
-  Node::Ptr vstiGainNodes[8];
+  // Aux Summing Buses (Reverb = 0, Delay = 1, Chorus = 2)
+  Node::Ptr auxBusNodes[3];
+
+  // Aux Return Faders (Post-FX)
+  Node::Ptr auxReturnGainNodes[3];
+
+  // Master Fader
+  Node::Ptr masterBusNode;
+
+  // Pan, Volume, and Aux Send processors for each track
+  std::map<InstrumentGroup, Node::Ptr> trackGainNodes;
 
   std::map<int, Node::Ptr> vstiNodes;
   std::map<int, Node::Ptr> vstiFilterNodes;

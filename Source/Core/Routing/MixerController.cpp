@@ -152,6 +152,24 @@ int MixerController::getTrackTranspose(InstrumentGroup group) const {
   return it != tracks.end() ? it->second.transpose.load() : 0;
 }
 
+bool MixerController::getTrackAuxSendBypass(InstrumentGroup group,
+                                            int auxIndex) const {
+  if (auxIndex < 0 || auxIndex >= 3)
+    return false;
+  const juce::ScopedLock sl(lock);
+  auto it = tracks.find(group);
+  return it != tracks.end() ? it->second.auxSendsBypass[auxIndex].load()
+                            : false;
+}
+
+void MixerController::setTrackAuxSendBypass(InstrumentGroup group, int auxIndex,
+                                            bool bypass) {
+  if (auxIndex < 0 || auxIndex >= 3)
+    return;
+  const juce::ScopedLock sl(lock);
+  tracks[group].auxSendsBypass[auxIndex].store(bypass);
+}
+
 void MixerController::updateSoloState() {
   anySoloActive = false;
   for (const auto &pair : tracks)

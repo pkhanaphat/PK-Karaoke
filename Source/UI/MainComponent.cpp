@@ -359,7 +359,7 @@ MainComponent::MainComponent(KaraokeEngine &engine)
 
   bottomBar->onPlayClicked = [this]() { karaokeEngine.play(); };
   bottomBar->onStopClicked = [this]() { karaokeEngine.stop(); };
-  bottomBar->onNextClicked = [this]() {};
+  bottomBar->onNextClicked = [this]() { karaokeEngine.nextTrack(); };
 
   bottomBar->onSeekChanged = [this](double normalizedPosition) {
     if (karaokeEngine.getMidiPlayer().isPlaying()) {

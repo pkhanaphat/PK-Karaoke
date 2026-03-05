@@ -7,7 +7,7 @@
 #include "Core/Routing/MixerController.h"
 #include <JuceHeader.h>
 
-class KaraokeEngine : public juce::AudioProcessor {
+class KaraokeEngine : public juce::AudioProcessor, public juce::AsyncUpdater {
 public:
   KaraokeEngine();
   ~KaraokeEngine() override;
@@ -43,6 +43,7 @@ public:
   void play();
   void pause();
   void stop();
+  void nextTrack(); // Manual skip or auto skip
 
   // SF2
   void loadSoundFont(const juce::File &sf2File);
@@ -57,6 +58,8 @@ public:
   std::function<void()> onSongLoaded;
 
 private:
+  void handleAsyncUpdate() override;
+
   MidiPlayer midiPlayer;
   MixerController mixerController;
   AudioGraphManager graphManager;

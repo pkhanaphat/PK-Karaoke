@@ -25,56 +25,57 @@ public:
     for (const auto metadata : midiMessages) {
       auto msg = metadata.getMessage();
       int ch = msg.getChannel();
-      if (ch >= 1 && ch <= 16) {
-        if (msg.isProgramChange()) {
-          channelPrograms[ch - 1] = msg.getProgramChangeNumber();
-        }
+      // Always allow MetaEvents (Text, Lyric, Tempo, etc.) and SysEx
+      if (msg.isMetaEvent() || msg.isSysEx() || ch < 1 || ch > 16) {
+        filtered.addEvent(msg, metadata.samplePosition);
+        continue;
+      }
 
-        bool isDrum = (ch == 10); // MIDI channel 10 = drum channel
+      if (msg.isProgramChange()) {
+        channelPrograms[ch - 1] = msg.getProgramChangeNumber();
+      }
 
-        InstrumentGroup group;
-        if (isDrum) {
-          // For drums: route based on note number (for note-on/off),
-          // or pass through if any drum group is routed to this destination
-          if (msg.isNoteOnOrOff()) {
-            group = MidiHelper::getInstrumentDrumType(msg.getNoteNumber());
-          } else {
-            // Non-note drum messages (CC, pitch, etc.) — pass through to
-            // this dest if any drum group is assigned to it
-            bool anyDrumRouted = false;
-            for (int n = 0; n < 128; ++n) {
-              InstrumentGroup g = MidiHelper::getInstrumentDrumType(n);
-              if (mixerController.getTrackOutputDestination(g) ==
-                  targetDestination) {
-                anyDrumRouted = true;
-                break;
-              }
-            }
-            if (anyDrumRouted)
-              filtered.addEvent(msg, metadata.samplePosition);
-            continue;
-          }
+      bool isDrum = (ch == 10); // MIDI channel 10 = drum channel
+      InstrumentGroup group;
+
+      if (isDrum) {
+        if (msg.isNoteOnOrOff()) {
+          group = MidiHelper::getInstrumentDrumType(msg.getNoteNumber());
         } else {
-          group = MidiHelper::getInstrumentType(channelPrograms[ch - 1]);
-        }
-
-        if (mixerController.getTrackOutputDestination(group) ==
-            targetDestination) {
-
-          if (mixerController.isTrackPlaying(group)) {
-            filtered.addEvent(msg, metadata.samplePosition);
-
-            // Simulating VU Meter for VSTi output since we don't have
-            // per-instrument audio streams
-            if (msg.isNoteOn()) {
-              float velocity = msg.getFloatVelocity();
-              vstiSimulatedPeaks[group] =
-                  std::max(vstiSimulatedPeaks[group], velocity);
+          // Pass through CC/Pitch for drums if any drum group is routed here
+          bool anyDrumRouted = false;
+          for (int n = 0; n < 128; ++n) {
+            InstrumentGroup g = MidiHelper::getInstrumentDrumType(n);
+            if (mixerController.getTrackOutputDestination(g) ==
+                targetDestination) {
+              anyDrumRouted = true;
+              break;
             }
           }
+          if (anyDrumRouted)
+            filtered.addEvent(msg, metadata.samplePosition);
+          continue;
         }
       } else {
-        filtered.addEvent(msg, metadata.samplePosition);
+        group = MidiHelper::getInstrumentType(channelPrograms[ch - 1]);
+      }
+
+      if (mixerController.getTrackOutputDestination(group) ==
+          targetDestination) {
+        // Always allow NoteOff/CC/PitchWheel so synths don't hang
+        bool isStoppingMessage = msg.isNoteOff() || msg.isController() ||
+                                 msg.isPitchWheel() || msg.isAllNotesOff() ||
+                                 msg.isAllSoundOff();
+
+        if (isStoppingMessage || mixerController.isTrackPlaying(group)) {
+          filtered.addEvent(msg, metadata.samplePosition);
+
+          if (msg.isNoteOn()) {
+            float velocity = msg.getFloatVelocity();
+            vstiSimulatedPeaks[group] =
+                std::max(vstiSimulatedPeaks[group], velocity);
+          }
+        }
       }
     }
     midiMessages.swapWith(filtered);
@@ -120,38 +121,136 @@ private:
 };
 
 //==============================================================================
-// VstiGainProcessor — measures peak and applies simple gain for VSTi slots
+// AuxBusProcessor — a simple summing node for Send FX
 //==============================================================================
-class VstiGainProcessor : public juce::AudioProcessor {
+class AuxBusProcessor : public juce::AudioProcessor {
 public:
-  VstiGainProcessor()
+  AuxBusProcessor(MixerController &mc, InstrumentGroup g,
+                  const juce::String &name)
       : AudioProcessor(
             BusesProperties()
                 .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                .withOutput("Output", juce::AudioChannelSet::stereo(), true)) {}
+                .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
+        mixerController(mc), group(g), busName(name) {}
 
-  ~VstiGainProcessor() override = default;
+  ~AuxBusProcessor() override = default;
+  void prepareToPlay(double, int) override {}
+  void releaseResources() override {}
+  void processBlock(juce::AudioBuffer<float> &buffer,
+                    juce::MidiBuffer &) override {
+    // Measure the input peak so the FX strip VU meter shows incoming send
+    // level.
+    const int numSamples = buffer.getNumSamples();
+    float peakL = 0.0f;
+    float peakR = 0.0f;
+
+    if (buffer.getNumChannels() > 0) {
+      peakL = buffer.getMagnitude(0, 0, numSamples);
+      peakR = peakL;
+    }
+    if (buffer.getNumChannels() > 1) {
+      peakR = buffer.getMagnitude(1, 0, numSamples);
+    }
+
+    mixerController.setTrackLevel(group, peakL, peakR);
+  }
+  juce::AudioProcessorEditor *createEditor() override { return nullptr; }
+  bool hasEditor() const override { return false; }
+  const juce::String getName() const override { return busName; }
+  bool acceptsMidi() const override { return false; }
+  bool producesMidi() const override { return false; }
+  bool isMidiEffect() const override { return false; }
+  double getTailLengthSeconds() const override { return 0.0; }
+  int getNumPrograms() override { return 1; }
+  int getCurrentProgram() override { return 0; }
+  void setCurrentProgram(int) override {}
+  const juce::String getProgramName(int) override { return ""; }
+  void changeProgramName(int, const juce::String &) override {}
+  void getStateInformation(juce::MemoryBlock &) override {}
+  void setStateInformation(const void *, int) override {}
+
+private:
+  MixerController &mixerController;
+  InstrumentGroup group;
+  juce::String busName;
+  JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AuxBusProcessor)
+};
+
+//==============================================================================
+// VstiGainProcessor — measures peak, applies simple gain, and outputs Sends
+//==============================================================================
+class TrackProcessor : public juce::AudioProcessor {
+public:
+  TrackProcessor(MixerController &mc, InstrumentGroup g)
+      : AudioProcessor(
+            BusesProperties()
+                .withInput("Input", juce::AudioChannelSet::stereo(), true)
+                .withOutput("Output", juce::AudioChannelSet::stereo(), true)
+                .withOutput("FX1", juce::AudioChannelSet::stereo(), true)
+                .withOutput("FX2", juce::AudioChannelSet::stereo(), true)
+                .withOutput("FX3", juce::AudioChannelSet::stereo(), true)),
+        mixerController(mc), group(g) {}
+
+  ~TrackProcessor() override = default;
 
   void prepareToPlay(double, int) override {}
   void releaseResources() override {}
 
   void processBlock(juce::AudioBuffer<float> &buffer,
                     juce::MidiBuffer &) override {
-    const float g = gain.load();
-    if (std::abs(g - 1.0f) > 0.0001f)
-      buffer.applyGain(g);
+    const int numSamples = buffer.getNumSamples();
+    float vol = mixerController.getTrackVolume(group);
+    float pan = mixerController.getTrackPan(group);
+    bool isPlaying = mixerController.isTrackPlaying(group);
 
-    float currentPeak = 0.0f;
-    for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
-      currentPeak = juce::jmax(
-          currentPeak, buffer.getMagnitude(ch, 0, buffer.getNumSamples()));
+    if (!isPlaying)
+      vol = 0.0f;
+
+    // Apply Main Gain and Pan to channels 0-1
+    const float leftGain = vol * juce::jmin(1.0f, (1.0f - pan) * 2.0f);
+    const float rightGain = vol * juce::jmin(1.0f, pan * 2.0f);
+
+    if (buffer.getNumChannels() >= 2) {
+      buffer.applyGain(0, 0, numSamples, leftGain);
+      buffer.applyGain(1, 0, numSamples, rightGain);
+
+      float peakL = buffer.getMagnitude(0, 0, numSamples);
+      float peakR = buffer.getMagnitude(1, 0, numSamples);
+      peakLevelL.store(peakL);
+      peakLevelR.store(peakR);
+
+      // Update Mixer Controller level for VU meters
+      mixerController.setTrackLevel(group, peakL, peakR);
+
+      // Copy to Aux Send buses (FX1, FX2, FX3)
+      // We use the signal AFTER gain/panning for Post-Fader sends
+      for (int auxIdx = 0; auxIdx < 3; ++auxIdx) {
+        float sendLevel = mixerController.getTrackAuxSendBypass(group, auxIdx)
+                              ? 0.0f
+                              : mixerController.getTrackAuxSend(group, auxIdx);
+        int startChannel = 2 + (auxIdx * 2);
+
+        // If the buffer doesn't have enough channels, the graph isn't providing
+        // them. This usually happens if the sends aren't connected in the
+        // graph.
+        if (buffer.getNumChannels() >= startChannel + 2) {
+          if (sendLevel > 0.001f) {
+            buffer.copyFrom(startChannel, 0, buffer, 0, 0, numSamples);
+            buffer.applyGain(startChannel, 0, numSamples, sendLevel);
+            buffer.copyFrom(startChannel + 1, 0, buffer, 1, 0, numSamples);
+            buffer.applyGain(startChannel + 1, 0, numSamples, sendLevel);
+          } else {
+            buffer.clear(startChannel, 0, numSamples);
+            buffer.clear(startChannel + 1, 0, numSamples);
+          }
+        }
+      }
     }
-    peakLevel.store(currentPeak);
   }
 
   juce::AudioProcessorEditor *createEditor() override { return nullptr; }
   bool hasEditor() const override { return false; }
-  const juce::String getName() const override { return "VSTi Gain"; }
+  const juce::String getName() const override { return "Track Processor"; }
   bool acceptsMidi() const override { return false; }
   bool producesMidi() const override { return false; }
   bool isMidiEffect() const override { return false; }
@@ -164,13 +263,15 @@ public:
   void getStateInformation(juce::MemoryBlock &) override {}
   void setStateInformation(const void *, int) override {}
 
-  void setGain(float g) { gain.store(g); }
-  float getPeakLevel() const { return peakLevel.load(); }
+  float getPeakLevelL() const { return peakLevelL.load(); }
+  float getPeakLevelR() const { return peakLevelR.load(); }
 
 private:
-  std::atomic<float> gain{1.0f};
-  std::atomic<float> peakLevel{0.0f};
-  JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VstiGainProcessor)
+  std::atomic<float> peakLevelL{0.0f};
+  std::atomic<float> peakLevelR{0.0f};
+  MixerController &mixerController;
+  InstrumentGroup group;
+  JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TrackProcessor)
 };
 
 AudioGraphManager::AudioGraphManager(MixerController &mc)
@@ -265,10 +366,36 @@ void AudioGraphManager::initialiseGraph() {
                              {audioOutputNode->nodeID, channel}});
   }
 
-  // Create VstiGainProcessor nodes for each slot 1-8 (0-7 indexing internally)
+  // Create TrackProcessor nodes for each slot 1-8 (0-7 indexing internally)
   for (int i = 0; i < 8; ++i) {
-    vstiGainNodes[i] = mainGraph.addNode(std::make_unique<VstiGainProcessor>());
+    auto group = static_cast<InstrumentGroup>(
+        static_cast<int>(InstrumentGroup::VSTi1) + i);
+    trackGainNodes[group] = mainGraph.addNode(
+        std::make_unique<TrackProcessor>(mixerController, group));
   }
+
+  // Create AuxBus processors (Summing Nodes before FX)
+  const char *auxNames[] = {"Reverb Bus", "Delay Bus", "Chorus Bus"};
+  InstrumentGroup auxGroupsBus[] = {InstrumentGroup::ReverbBus,
+                                    InstrumentGroup::DelayBus,
+                                    InstrumentGroup::ChorusBus};
+  for (int i = 0; i < 3; ++i) {
+    auxBusNodes[i] = mainGraph.addNode(std::make_unique<AuxBusProcessor>(
+        mixerController, auxGroupsBus[i], juce::String(auxNames[i])));
+  }
+
+  // Create Aux Return Faders (TrackProcessors after FX)
+  InstrumentGroup auxGroups[] = {InstrumentGroup::ReverbBus,
+                                 InstrumentGroup::DelayBus,
+                                 InstrumentGroup::ChorusBus};
+  for (int i = 0; i < 3; ++i) {
+    auxReturnGainNodes[i] = mainGraph.addNode(
+        std::make_unique<TrackProcessor>(mixerController, auxGroups[i]));
+  }
+
+  // Create Master Fader
+  masterBusNode = mainGraph.addNode(std::make_unique<TrackProcessor>(
+      mixerController, InstrumentGroup::MasterBus));
 
   DBG("AudioGraphManager: Graph initialized. Output channels: "
       << mainGraph.getTotalNumOutputChannels());
@@ -728,27 +855,46 @@ void AudioGraphManager::rebuildGraphRouting() {
     // Route through FX slots 0..3
     for (int slot = 0; slot < 4; ++slot) {
       if (auto fxNode = fxNodes[group][slot]) {
-        // Assume stereo for simplicity
-        for (int ch = 0;
-             ch < juce::jmin(
-                      currentNode->getProcessor()->getTotalNumOutputChannels(),
-                      fxNode->getProcessor()->getTotalNumInputChannels());
-             ++ch) {
+        // Enforce max 2 channels (stereo) routing to avoid 0-in setups
+        fxNode->setBypassed(mixerController.getVstPluginBypass(group, slot));
+        for (int ch = 0; ch < 2; ++ch) {
           mainGraph.addConnection(
-              {{currentNode->nodeID, ch}, {fxNode->nodeID, ch}});
+              {{currentNode->nodeID,
+                ch % currentNode->getProcessor()->getTotalNumOutputChannels()},
+               {fxNode->nodeID,
+                ch % fxNode->getProcessor()->getTotalNumInputChannels()}});
         }
         currentNode = fxNode;
       }
     }
 
     // Connect last node to destination
-    for (int ch = 0;
-         ch <
-         juce::jmin(currentNode->getProcessor()->getTotalNumOutputChannels(),
-                    destNode->getProcessor()->getTotalNumInputChannels());
-         ++ch) {
+    for (int ch = 0; ch < 2; ++ch) {
       mainGraph.addConnection(
-          {{currentNode->nodeID, ch}, {destNode->nodeID, ch}});
+          {{currentNode->nodeID,
+            ch % currentNode->getProcessor()->getTotalNumOutputChannels()},
+           {destNode->nodeID,
+            ch % destNode->getProcessor()->getTotalNumInputChannels()}});
+    }
+  };
+
+  // Helper lambda to route Aux Send channels to the Aux Busses
+  auto connectAuxSends = [&](Node::Ptr srcNode) {
+    if (srcNode == nullptr)
+      return;
+
+    // Check if the processor has enough output channels (Main + 3x Stereo Aux)
+    if (srcNode->getProcessor()->getTotalNumOutputChannels() < 8)
+      return;
+
+    for (int auxIdx = 0; auxIdx < 3; ++auxIdx) {
+      if (auxBusNodes[auxIdx] != nullptr) {
+        int startChannel = 2 + (auxIdx * 2);
+        mainGraph.addConnection({{srcNode->nodeID, startChannel},
+                                 {auxBusNodes[auxIdx]->nodeID, 0}});
+        mainGraph.addConnection({{srcNode->nodeID, startChannel + 1},
+                                 {auxBusNodes[auxIdx]->nodeID, 1}});
+      }
     }
   };
 
@@ -758,14 +904,29 @@ void AudioGraphManager::rebuildGraphRouting() {
             dynamic_cast<SF2Source *>(globalSynthNode->getProcessor())) {
       sf2Source->setExcludedGroups(splittedGroups);
     }
+    // Global Synth -> Master Bus
     connectAudioChain(globalSynthNode, InstrumentGroup::MasterBus,
-                      audioOutputNode); // Master FX later
+                      masterBusNode);
+    connectAuxSends(globalSynthNode);
   }
 
   // 4. Route Split Synths
   for (auto group : splittedGroups) {
     if (auto synthNode = splitSynthNodes[group]) {
-      connectAudioChain(synthNode, group, audioOutputNode);
+      if (trackGainNodes.find(group) == trackGainNodes.end()) {
+        trackGainNodes[group] = mainGraph.addNode(
+            std::make_unique<TrackProcessor>(mixerController, group));
+      }
+
+      auto destNode = trackGainNodes[group];
+      connectAudioChain(synthNode, group, destNode);
+
+      // TrackProcessor -> Master Bus
+      for (int ch = 0; ch < 2; ++ch) {
+        mainGraph.addConnection(
+            {{destNode->nodeID, ch}, {masterBusNode->nodeID, ch}});
+      }
+      connectAuxSends(destNode);
     }
   }
 
@@ -777,20 +938,49 @@ void AudioGraphManager::rebuildGraphRouting() {
 
     auto vstiGroup = static_cast<InstrumentGroup>(
         static_cast<int>(InstrumentGroup::VSTi1) + slot);
-    auto destNode =
-        vstiGainNodes[slot] != nullptr ? vstiGainNodes[slot] : audioOutputNode;
+    auto destNode = trackGainNodes.count(vstiGroup) ? trackGainNodes[vstiGroup]
+                                                    : masterBusNode;
 
     connectAudioChain(pair.second, vstiGroup, destNode);
 
-    if (destNode != audioOutputNode) {
-      // Connect Gain Node to Output
-      for (int ch = 0;
-           ch <
-           juce::jmin(destNode->getProcessor()->getTotalNumOutputChannels(), 2);
-           ++ch) {
+    if (destNode != masterBusNode) {
+      // TrackProcessor -> Master Bus
+      for (int ch = 0; ch < 2; ++ch) {
         mainGraph.addConnection(
-            {{destNode->nodeID, ch}, {audioOutputNode->nodeID, ch}});
+            {{destNode->nodeID, ch}, {masterBusNode->nodeID, ch}});
       }
+      connectAuxSends(destNode);
+    }
+  }
+
+  // 6. Route Aux Returns
+  // Aux Summing -> FX Strip -> Aux Return Fader -> Master Bus
+  InstrumentGroup auxGroups[] = {InstrumentGroup::ReverbBus,
+                                 InstrumentGroup::DelayBus,
+                                 InstrumentGroup::ChorusBus};
+  for (int i = 0; i < 3; ++i) {
+    if (auto auxSumNode = auxBusNodes[i]) {
+      auto auxFaderNode = auxReturnGainNodes[i];
+      if (auxFaderNode != nullptr) {
+        connectAudioChain(auxSumNode, auxGroups[i], auxFaderNode);
+
+        // Aux Return Fader -> Master Bus
+        for (int ch = 0; ch < 2; ++ch) {
+          mainGraph.addConnection(
+              {{auxFaderNode->nodeID, ch}, {masterBusNode->nodeID, ch}});
+        }
+      }
+    }
+  }
+
+  // 7. Route Master Bus to Hardware Output
+  if (masterBusNode != nullptr) {
+    // Future: add Master FX strip here if needed:
+    // connectAudioChain(masterBusNode, InstrumentGroup::MasterBus,
+    // audioOutputNode);
+    for (int ch = 0; ch < 2; ++ch) {
+      mainGraph.addConnection(
+          {{masterBusNode->nodeID, ch}, {audioOutputNode->nodeID, ch}});
     }
   }
 }
@@ -800,16 +990,17 @@ void AudioGraphManager::setStateInformation(const void *data, int sizeInBytes) {
 }
 
 void AudioGraphManager::setVstiVolume(int slotIndex, float gain) {
-  if (slotIndex >= 0 && slotIndex < 8 && vstiGainNodes[slotIndex] != nullptr)
-    if (auto *p = dynamic_cast<VstiGainProcessor *>(
-            vstiGainNodes[slotIndex]->getProcessor()))
-      p->setGain(gain);
+  // Volume is now handled automatically by TrackProcessor pulling from
+  // MixerController
 }
 
 float AudioGraphManager::getVstiPeak(int slotIndex) const {
-  if (slotIndex >= 0 && slotIndex < 8 && vstiGainNodes[slotIndex] != nullptr)
-    if (auto *p = dynamic_cast<VstiGainProcessor *>(
-            vstiGainNodes[slotIndex]->getProcessor()))
-      return p->getPeakLevel();
+  auto vstiGroup = static_cast<InstrumentGroup>(
+      static_cast<int>(InstrumentGroup::VSTi1) + slotIndex);
+  auto it = trackGainNodes.find(vstiGroup);
+  if (it != trackGainNodes.end() && it->second != nullptr) {
+    if (auto *p = dynamic_cast<TrackProcessor *>(it->second->getProcessor()))
+      return juce::jmax(p->getPeakLevelL(), p->getPeakLevelR());
+  }
   return 0.0f;
 }

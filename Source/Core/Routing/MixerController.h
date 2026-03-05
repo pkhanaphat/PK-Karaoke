@@ -99,11 +99,12 @@ enum class OutputDestination {
 };
 
 struct TrackState {
-  std::atomic<float> volume{1.0f}; // Linear fader gain
-  std::atomic<float> pan{0.5f};    // 0 = Left, 0.5 = Center, 1 = Right
-  std::atomic<float> gain{1.0f};   // Input trim/gain
-  std::atomic<float> auxSends[3];  // 0: Reverb, 1: Delay, 2: Chorus
-  std::atomic<int> transpose{0};   // Transpose in semitones
+  std::atomic<float> volume{1.0f};     // Linear fader gain
+  std::atomic<float> pan{0.5f};        // 0 = Left, 0.5 = Center, 1 = Right
+  std::atomic<float> gain{1.0f};       // Input trim/gain
+  std::atomic<float> auxSends[3];      // 0: Reverb, 1: Delay, 2: Chorus
+  std::atomic<bool> auxSendsBypass[3]; // True if the aux send is bypassed
+  std::atomic<int> transpose{0};       // Transpose in semitones
   std::atomic<OutputDestination> outputDest{OutputDestination::SF2};
 
   juce::String sf2Path;      // Custom SoundFont for this track
@@ -116,16 +117,20 @@ struct TrackState {
   std::atomic<float> currentPeakRight{0.0f}; // Current peak level for R meter
 
   TrackState() {
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < 3; ++i) {
       auxSends[i].store(0.0f);
+      auxSendsBypass[i].store(false);
+    }
   }
 
   TrackState(const TrackState &other) {
     volume.store(other.volume.load());
     pan.store(other.pan.load());
     gain.store(other.gain.load());
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < 3; ++i) {
       auxSends[i].store(other.auxSends[i].load());
+      auxSendsBypass[i].store(other.auxSendsBypass[i].load());
+    }
     transpose.store(other.transpose.load());
     outputDest.store(other.outputDest.load());
     isMuted.store(other.isMuted.load());
@@ -154,6 +159,9 @@ public:
 
   void setTrackAuxSend(InstrumentGroup group, int auxIndex, float linearGain);
   float getTrackAuxSend(InstrumentGroup group, int auxIndex) const;
+
+  bool getTrackAuxSendBypass(InstrumentGroup group, int auxIndex) const;
+  void setTrackAuxSendBypass(InstrumentGroup group, int auxIndex, bool bypass);
 
   void setTrackMute(InstrumentGroup group, bool shouldMute);
   bool isTrackMuted(InstrumentGroup group) const;

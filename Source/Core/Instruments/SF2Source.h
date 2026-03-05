@@ -60,7 +60,6 @@ public:
 
 private:
   tsf *mainSynth = nullptr;
-  tsf *channelSynths[16] = {nullptr};
   int channelPrograms[16] = {0};
   bool isDrumChannel[16] = {false};
 
@@ -75,10 +74,14 @@ private:
 
   std::optional<InstrumentGroup> targetGroup;  // Only play this group
   std::vector<InstrumentGroup> excludedGroups; // Do not play these groups
-  std::map<InstrumentGroup, tsf *> drumSynths;
+
+  std::map<InstrumentGroup, tsf *>
+      activeSynths; // Dynamically allocated synths based on playing notes
   std::map<InstrumentGroup, tsf *> customSynths; // For custom SF2 per-track
 
   void freeSynths();
+  tsf *getOrCreateSynthForGroup(InstrumentGroup group,
+                                tsf *sharedFontToCopyFrom);
 
   void renderChannels(juce::AudioBuffer<float> &dest, int startSample,
                       int numSamples);
