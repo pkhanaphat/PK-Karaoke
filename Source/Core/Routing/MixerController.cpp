@@ -1,4 +1,4 @@
-﻿#include "Core/Routing/MixerController.h"
+#include "Core/Routing/MixerController.h"
 
 MixerController::MixerController() {
   // Initialize mandatory buses
@@ -15,7 +15,6 @@ void MixerController::initializeTrack(InstrumentGroup group) {
 }
 
 bool MixerController::isTrackPlaying(InstrumentGroup group) const {
-  const juce::ScopedLock sl(lock);
   auto it = tracks.find(group);
   if (it == tracks.end())
     return !anySoloActive;
@@ -30,34 +29,28 @@ bool MixerController::isTrackPlaying(InstrumentGroup group) const {
 }
 
 void MixerController::setTrackVolume(InstrumentGroup group, float linearGain) {
-  const juce::ScopedLock sl(lock);
   tracks[group].volume.store(juce::jlimit(0.0f, 2.0f, linearGain));
 }
 
 float MixerController::getTrackVolume(InstrumentGroup group) const {
-  const juce::ScopedLock sl(lock);
   auto it = tracks.find(group);
   return it != tracks.end() ? it->second.volume.load() : 1.0f;
 }
 
 void MixerController::setTrackPan(InstrumentGroup group, float panValue) {
-  const juce::ScopedLock sl(lock);
   tracks[group].pan.store(juce::jlimit(0.0f, 1.0f, panValue));
 }
 
 float MixerController::getTrackPan(InstrumentGroup group) const {
-  const juce::ScopedLock sl(lock);
   auto it = tracks.find(group);
   return it != tracks.end() ? it->second.pan.load() : 0.5f;
 }
 
 void MixerController::setTrackGain(InstrumentGroup group, float linearGain) {
-  const juce::ScopedLock sl(lock);
   tracks[group].gain.store(juce::jlimit(0.0f, 4.0f, linearGain));
 }
 
 float MixerController::getTrackGain(InstrumentGroup group) const {
-  const juce::ScopedLock sl(lock);
   auto it = tracks.find(group);
   return it != tracks.end() ? it->second.gain.load() : 1.0f;
 }
@@ -80,30 +73,25 @@ float MixerController::getTrackAuxSend(InstrumentGroup group,
 }
 
 void MixerController::setTrackMute(InstrumentGroup group, bool shouldMute) {
-  const juce::ScopedLock sl(lock);
   tracks[group].isMuted.store(shouldMute);
 }
 
 bool MixerController::isTrackMuted(InstrumentGroup group) const {
-  const juce::ScopedLock sl(lock);
   auto it = tracks.find(group);
   return it != tracks.end() ? it->second.isMuted.load() : false;
 }
 
 void MixerController::setTrackSolo(InstrumentGroup group, bool shouldSolo) {
-  const juce::ScopedLock sl(lock);
   tracks[group].isSolo.store(shouldSolo);
   updateSoloState();
 }
 
 bool MixerController::isTrackSolo(InstrumentGroup group) const {
-  const juce::ScopedLock sl(lock);
   auto it = tracks.find(group);
   return it != tracks.end() ? it->second.isSolo.load() : false;
 }
 
 bool MixerController::isEffectivelyMuted(InstrumentGroup group) const {
-  const juce::ScopedLock sl(lock);
   auto it = tracks.find(group);
   if (it == tracks.end())
     return true;
@@ -142,12 +130,10 @@ void MixerController::setTrackLevel(InstrumentGroup group, float peakL,
 
 void MixerController::setTrackTranspose(InstrumentGroup group,
                                         int transposeValue) {
-  const juce::ScopedLock sl(lock);
   tracks[group].transpose.store(juce::jlimit(-24, 24, transposeValue));
 }
 
 int MixerController::getTrackTranspose(InstrumentGroup group) const {
-  const juce::ScopedLock sl(lock);
   auto it = tracks.find(group);
   return it != tracks.end() ? it->second.transpose.load() : 0;
 }
@@ -216,7 +202,6 @@ bool MixerController::getVstPluginBypass(InstrumentGroup group,
 
 void MixerController::setTrackOutputDestination(InstrumentGroup group,
                                                 OutputDestination dest) {
-  const juce::ScopedLock sl(lock);
   if (tracks.find(group) == tracks.end()) {
     tracks[group]; // initialize if not exists
   }
@@ -225,7 +210,6 @@ void MixerController::setTrackOutputDestination(InstrumentGroup group,
 
 OutputDestination
 MixerController::getTrackOutputDestination(InstrumentGroup group) const {
-  const juce::ScopedLock sl(lock);
   auto it = tracks.find(group);
   return it != tracks.end() ? it->second.outputDest.load()
                             : OutputDestination::SF2;
@@ -277,7 +261,6 @@ juce::File MixerController::getSF2FileByName(const juce::String &name) const {
 
 void MixerController::processBuffer(juce::AudioBuffer<float> &buffer,
                                     InstrumentGroup group) {
-  const juce::ScopedLock sl(lock);
   auto it = tracks.find(group);
   if (it == tracks.end())
     return;

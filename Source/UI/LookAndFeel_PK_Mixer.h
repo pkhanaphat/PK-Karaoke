@@ -116,7 +116,7 @@ public:
 
   void drawRotarySlider(juce::Graphics &g, int x, int y, int width, int height,
                         float sliderPos, float startAngle, float endAngle,
-                        juce::Slider &) override {
+                        juce::Slider &slider) override {
     auto r =
         juce::Rectangle<float>((float)x, (float)y, (float)width, (float)height)
             .reduced(2.0f);
@@ -127,7 +127,11 @@ public:
     g.setColour(juce::Colour(45, 45, 48));
     g.fillEllipse(r);
 
-    g.setColour(juce::Colour(90, 95, 105));
+    juce::Colour outlineColor =
+        slider.findColour(juce::Slider::rotarySliderOutlineColourId);
+    if (outlineColor.isTransparent())
+      outlineColor = juce::Colour(90, 95, 105);
+    g.setColour(outlineColor);
     g.drawEllipse(r, 1.5f);
 
     float angle = startAngle + sliderPos * (endAngle - startAngle);
@@ -137,7 +141,11 @@ public:
         cy + std::sin(angle - juce::MathConstants<float>::halfPi) * radius *
                  0.7f);
 
-    g.setColour(juce::Colour(120, 180, 255));
+    juce::Colour pointerColor =
+        slider.findColour(juce::Slider::rotarySliderFillColourId);
+    if (pointerColor.isTransparent())
+      pointerColor = juce::Colour(120, 180, 255);
+    g.setColour(pointerColor);
     g.drawLine(cx, cy, p.x, p.y, 2.0f);
   }
 

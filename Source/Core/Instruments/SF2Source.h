@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "Audio/tsf.h"
 #include "Core/MidiHelper.h"
 #include "Core/Routing/MixerController.h"
@@ -71,6 +71,7 @@ private:
   double currentSampleRate = 44100.0;
   int maxSamplesPerBlock = 1024;
   juce::HeapBlock<float> interleavedBuffer;
+  juce::AudioBuffer<float> internalMixBuffer;
 
   std::optional<InstrumentGroup> targetGroup;  // Only play this group
   std::vector<InstrumentGroup> excludedGroups; // Do not play these groups

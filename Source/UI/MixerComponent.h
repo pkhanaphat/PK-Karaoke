@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "Audio/AudioGraphManager.h"
 #include "Core/Routing/MixerController.h"
@@ -155,8 +155,7 @@ private:
 class ChannelStripComponent : public juce::Component,
                               public juce::Slider::Listener,
                               public juce::Button::Listener,
-                              public juce::ComboBox::Listener,
-                              public juce::Timer {
+                              public juce::ComboBox::Listener {
 public:
   ChannelStripComponent(MixerController &mc, AudioGraphManager &agm,
                         InstrumentGroup group, const juce::String &name);
@@ -165,7 +164,7 @@ public:
   void paint(juce::Graphics &) override;
   void paintOverChildren(juce::Graphics &) override;
   void resized() override;
-  void timerCallback() override;
+  void updateMeter();
 
   void sliderValueChanged(juce::Slider *slider) override;
   void buttonClicked(juce::Button *button) override;
@@ -210,8 +209,7 @@ private:
 //==============================================================================
 class FXStripComponent : public juce::Component,
                          public juce::Slider::Listener,
-                         public juce::Button::Listener,
-                         public juce::Timer {
+                         public juce::Button::Listener {
 public:
   FXStripComponent(MixerController &mc, AudioGraphManager &agm,
                    InstrumentGroup group, const juce::String &name);
@@ -220,7 +218,7 @@ public:
   void paint(juce::Graphics &) override;
   void paintOverChildren(juce::Graphics &) override;
   void resized() override;
-  void timerCallback() override;
+  void updateMeter();
   void sliderValueChanged(juce::Slider *slider) override;
   void buttonClicked(juce::Button *button) override;
 
@@ -254,8 +252,7 @@ private:
 //==============================================================================
 class VstiStripComponent : public juce::Component,
                            public juce::Slider::Listener,
-                           public juce::Button::Listener,
-                           public juce::Timer {
+                           public juce::Button::Listener {
 public:
   VstiStripComponent(MixerController &mc, AudioGraphManager &agm, int slot);
   ~VstiStripComponent() override;
@@ -263,7 +260,7 @@ public:
   void paint(juce::Graphics &) override;
   void paintOverChildren(juce::Graphics &) override;
   void resized() override;
-  void timerCallback() override;
+  void updateMeter();
   void sliderValueChanged(juce::Slider *) override;
   void buttonClicked(juce::Button *) override;
   void mouseDown(const juce::MouseEvent &event) override;
@@ -304,8 +301,7 @@ private:
 //==============================================================================
 class MasterStripComponent : public juce::Component,
                              public juce::Slider::Listener,
-                             public juce::Button::Listener,
-                             public juce::Timer {
+                             public juce::Button::Listener {
 public:
   MasterStripComponent(MixerController &mc, AudioGraphManager &agm);
   ~MasterStripComponent() override;
@@ -313,7 +309,7 @@ public:
   void paint(juce::Graphics &) override;
   void paintOverChildren(juce::Graphics &) override;
   void resized() override;
-  void timerCallback() override;
+  void updateMeter();
   void sliderValueChanged(juce::Slider *slider) override;
   void buttonClicked(juce::Button *button) override;
 
@@ -343,7 +339,7 @@ private:
 //==============================================================================
 // MixerComponent - Container for all strips
 //==============================================================================
-class MixerComponent : public juce::Component {
+class MixerComponent : public juce::Component, public juce::Timer {
 public:
   MixerComponent(MixerController &mc, AudioGraphManager &agm);
   ~MixerComponent() override;
@@ -353,6 +349,9 @@ public:
   void toggleLayout();
   void updateAllStrips();
   void updateStripVisibility();
+  void timerCallback() override;
+
+  int getRequiredWidth() const;
 
 private:
   bool isExpandedLayout = true;

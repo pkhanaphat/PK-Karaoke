@@ -1,4 +1,4 @@
-﻿#include "Audio/AudioGraphManager.h"
+#include "Audio/AudioGraphManager.h"
 #include "Audio/tsf.h"
 #include "Core/MidiHelper.h"
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -487,8 +487,11 @@ public:
   }
 
   void closeButtonPressed() override {
-    // ปิดหน้าต่างและลบวัตถุทิ้งเพื่อให้คืน memory
-    delete this;
+    // ปิดหน้าต่างอย่างปลอดภัยโดยให้ MessageManager เป็นผู้ลบ
+    setVisible(false);
+    juce::MessageManager::callAsync([c = juce::Component::SafePointer<juce::Component>(this)] {
+      delete c.getComponent();
+    });
   }
 };
 
@@ -669,6 +672,7 @@ void AudioGraphManager::prepareToPlay(double sampleRate, int samplesPerBlock) {
   // otherwise it will silently reject the buffer and drop all audio.
   mainGraph.setPlayConfigDetails(2, 2, sampleRate, samplesPerBlock);
   mainGraph.prepareToPlay(sampleRate, samplesPerBlock);
+  graphBuffer.setSize(2, samplesPerBlock);
 }
 
 void AudioGraphManager::releaseResources() { mainGraph.releaseResources(); }
@@ -690,31 +694,29 @@ void AudioGraphManager::getNextAudioBlock(juce::AudioBuffer<float> &buffer,
   // But AudioProcessorGraph is prepared with 2 inputs and 2 outputs.
   // We MUST process into a guaranteed 2-in/2-out buffer to avoid silent
   // rejection.
-  juce::AudioBuffer<float> graphBuffer(2, numSamples);
-  graphBuffer.clear();
+  if (graphBuffer.getNumSamples() < numSamples) { graphBuffer.setSize(2, numSamples, false, true, true); }
+  juce::AudioBuffer<float> localGraphBuffer(graphBuffer.getArrayOfWritePointers(), 2, numSamples);
+  localGraphBuffer.clear();
 
   // Process the entire graph normally!
   juce::ScopedNoDenormals noDenormals;
-  mainGraph.processBlock(graphBuffer, midiBuffer);
+  mainGraph.processBlock(localGraphBuffer, midiBuffer);
 
   // Copy the processed stereo audio back into the actual destination buffer
   buffer.clear();
   for (int i = 0;
-       i < juce::jmin(buffer.getNumChannels(), graphBuffer.getNumChannels());
+       i < juce::jmin(buffer.getNumChannels(), localGraphBuffer.getNumChannels());
        ++i) {
-    buffer.copyFrom(i, 0, graphBuffer, i, 0, numSamples);
+    buffer.copyFrom(i, 0, localGraphBuffer, i, 0, numSamples);
   }
 
   static int emptyCounter = 0;
-  if (graphBuffer.getMagnitude(0, graphBuffer.getNumSamples()) < 0.0001f) {
+  if (localGraphBuffer.getMagnitude(0, localGraphBuffer.getNumSamples()) < 0.0001f) {
     if (++emptyCounter % 500 == 0)
-      juce::File("C:\\temp\\crash.log")
-          .appendText(
-              "AudioGraphManager: Buffer is silent after processing.\n");
+      DBG("AudioGraphManager: Buffer is silent after processing.");
   } else {
     if (emptyCounter > 0)
-      juce::File("C:\\temp\\crash.log")
-          .appendText("AudioGraphManager: Buffer has AUDIO from Graph!\n");
+      DBG("AudioGraphManager: Buffer has AUDIO from Graph!");
     emptyCounter = 0;
   }
 }

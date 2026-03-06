@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "Core/Instruments/SF2Source.h"
 #include "Core/MidiPlayer.h"
@@ -136,6 +136,7 @@ private:
 
   MixerController &mixerController;
   PluginHost pluginHost;
+  juce::AudioBuffer<float> graphBuffer;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioGraphManager)
 };

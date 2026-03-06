@@ -1,11 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 
-
-
 project(PKKaraokeVST3 VERSION 1.0.0)
 
-# Use local JUCE installation
-add_subdirectory("E:/juce-8.0.12-windows/JUCE" "Build/JUCE")
+# Use local JUCE installation (override with -DJUCE_DIR=...)
+set(JUCE_DIR "D:/JUCE" CACHE PATH "Path to JUCE root directory")
+if(NOT EXISTS "${JUCE_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR "JUCE_DIR is invalid: ${JUCE_DIR}. Set -DJUCE_DIR=<path-to-JUCE>.")
+endif()
+add_subdirectory("${JUCE_DIR}" "Build/JUCE")
 
 # Create the executable target
 juce_add_gui_app(PKKaraokeVST3
@@ -16,8 +18,6 @@ juce_add_gui_app(PKKaraokeVST3
     ICON_BIG "Source/Resources/Logo.png"
     ICON_SMALL "Source/Resources/Logo.png"
 )
-
-
 
 # Enforce C++20
 target_compile_features(PKKaraokeVST3 PUBLIC cxx_std_20)
@@ -137,6 +137,7 @@ target_link_libraries(PKKaraokeVST3 PRIVATE
     juce::juce_audio_formats
     juce::juce_audio_utils
     juce::juce_audio_processors
+    juce::juce_opengl
 )
 
 # Generate JuceHeader.h

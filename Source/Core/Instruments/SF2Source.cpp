@@ -1,4 +1,4 @@
-﻿#include "Core/Instruments/SF2Source.h"
+#include "Core/Instruments/SF2Source.h"
 #include "Core/MidiHelper.h"
 #include <JuceHeader.h>
 #include <functional>
@@ -9,7 +9,7 @@
 #include "Audio/tsf.h"
 
 static void LOG_CRASH(const juce::String &msg) {
-  juce::File("C:\\temp\\crash.log").appendText(msg + "\n");
+  DBG(msg);
 }
 
 SF2Source::SF2Source(MixerController *mixerController,
@@ -76,8 +76,9 @@ bool SF2Source::loadSoundFont(const juce::File &sf2File, tsf *sharedSynth) {
                      0.0f);
       tsf_set_volume(mainSynth, currentVolume);
 
-      // We no longer pre-allocate channel arrays or drum synths here.
-      // They will be created dynamically on note-on events!
+      // Pre-allocate synths for all possible sound-producing groups to avoid tsf_copy on the audio thread
+      for (int i = 0; i <= 43; ++i) getOrCreateSynthForGroup(static_cast<InstrumentGroup>(i), mainSynth);
+      for (int i = 100; i <= 116; ++i) getOrCreateSynthForGroup(static_cast<InstrumentGroup>(i), mainSynth);
 
       DBG("SF2Source: Loaded " + sf2File.getFullPathName());
       LOG_CRASH("loadSoundFont: End Success");
@@ -154,6 +155,7 @@ void SF2Source::prepareToPlay(double sampleRate, int samplesPerBlock) {
   currentSampleRate = sampleRate;
   maxSamplesPerBlock = samplesPerBlock;
   interleavedBuffer.malloc(maxSamplesPerBlock * 2);
+  internalMixBuffer.setSize(2, maxSamplesPerBlock);
 
   if (mainSynth != nullptr) {
     tsf_set_output(mainSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,
@@ -215,7 +217,8 @@ void SF2Source::processBlock(juce::AudioBuffer<float> &buffer,
     interleavedBuffer.malloc(maxSamplesPerBlock * 2);
   }
 
-  juce::AudioBuffer<float> mixBuffer(2, numSamples);
+  if (internalMixBuffer.getNumSamples() < numSamples) { internalMixBuffer.setSize(2, numSamples, false, true, true); }
+  juce::AudioBuffer<float> mixBuffer(internalMixBuffer.getArrayOfWritePointers(), 2, numSamples);
   mixBuffer.clear();
 
   // Interleaved MIDI + audio render
@@ -394,25 +397,23 @@ tsf *SF2Source::getOrCreateSynthForGroup(InstrumentGroup group,
     return activeIt->second;
   }
 
-  // Create new dynamically
-  tsf *newSynth = tsf_copy(sharedFontToCopyFrom);
-  if (newSynth != nullptr) {
-    tsf_set_output(newSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,
-                   0.0f);
-    tsf_set_volume(newSynth, currentVolume);
-
-    // Sync channel programs
-    for (int ch = 0; ch < 16; ++ch) {
-      tsf_channel_set_presetnumber(newSynth, ch, channelPrograms[ch],
-                                   (ch == 9) ? 1 : 0);
-    }
-
-    activeSynths[group] = newSynth;
-    LOG_CRASH("SF2Source: Dynamically created synth for InstrumentGroup " +
-              juce::String((int)group));
-    return newSynth;
+  // To prevent audio thread allocation, if we are called during playback
+  // we just return the mainSynth instead of cloning anything.
+  // Initialization should happen during loadSoundFont().
+  if (juce::MessageManager::getInstance()->isThisTheMessageThread()) {
+      tsf *newSynth = tsf_copy(sharedFontToCopyFrom);
+      if (newSynth != nullptr) {
+        tsf_set_output(newSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate, 0.0f);
+        tsf_set_volume(newSynth, currentVolume);
+        for (int ch = 0; ch < 16; ++ch) {
+          tsf_channel_set_presetnumber(newSynth, ch, channelPrograms[ch], (ch == 9) ? 1 : 0);
+        }
+        activeSynths[group] = newSynth;
+        return newSynth;
+      }
   }
-  return nullptr;
+
+  return mainSynth;
 }
 
 void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {

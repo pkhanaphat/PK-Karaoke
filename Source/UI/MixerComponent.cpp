@@ -1,4 +1,4 @@
-﻿#include "UI/MixerComponent.h"
+#include "UI/MixerComponent.h"
 #include "Core/MidiHelper.h"
 #include <algorithm>
 #include <functional>
@@ -152,16 +152,16 @@ ChannelStripComponent::ChannelStripComponent(MixerController &mc,
 
   updateStateFromController();
   setLookAndFeel(&mixerLAF);
-  startTimerHz(60);
+
 }
 
-ChannelStripComponent::~ChannelStripComponent() { stopTimer(); }
+ChannelStripComponent::~ChannelStripComponent() { }
 
 void ChannelStripComponent::comboBoxChanged(juce::ComboBox * /*cb*/) {
   // SF2 and output routing is handled by InstrumentSettingsWindow
 }
 
-void ChannelStripComponent::timerCallback() {
+void ChannelStripComponent::updateMeter() {
   // Use left peak for the single meter representation
   meter.setLevel(mixerController.getTrackLevelLeft(trackGroup));
   meter.decayPeak();
@@ -189,11 +189,11 @@ void ChannelStripComponent::updateStateFromController() {
 
     bool isBypassed = mixerController.getTrackAuxSendBypass(trackGroup, i);
     auxSends[i].setColour(juce::Slider::rotarySliderOutlineColourId,
-                          isBypassed ? juce::Colours::grey
-                                     : juce::Colours::white);
+                          isBypassed ? juce::Colour(60, 60, 65)
+                                     : juce::Colour(90, 95, 105));
     auxSends[i].setColour(juce::Slider::rotarySliderFillColourId,
                           isBypassed ? juce::Colours::grey
-                                     : juce::Colour(0xff4a90e2));
+                                     : juce::Colour(120, 180, 255));
     auxSends[i].setTooltip(isBypassed ? "Bypassed (Right-click to enable)"
                                       : "Right-click to bypass");
   }
@@ -649,12 +649,12 @@ FXStripComponent::FXStripComponent(MixerController &mc, AudioGraphManager &agm,
 
   setLookAndFeel(&mixerLAF);
   loadIcon();
-  startTimerHz(60);
+
 }
 
-FXStripComponent::~FXStripComponent() { stopTimer(); }
+FXStripComponent::~FXStripComponent() { }
 
-void FXStripComponent::timerCallback() {
+void FXStripComponent::updateMeter() {
   // Use left peak for the single meter representation
   meter.setLevel(mixerController.getTrackLevelLeft(fxGroup));
   meter.decayPeak();
@@ -877,13 +877,13 @@ MasterStripComponent::MasterStripComponent(MixerController &mc,
 
   setLookAndFeel(&mixerLAF);
   loadIcon();
-  startTimerHz(60);
+
   repaint();
 }
 
-MasterStripComponent::~MasterStripComponent() { stopTimer(); }
+MasterStripComponent::~MasterStripComponent() { }
 
-void MasterStripComponent::timerCallback() {
+void MasterStripComponent::updateMeter() {
   float peakL = mixerController.getTrackLevelLeft(InstrumentGroup::MasterBus);
   float peakR = mixerController.getTrackLevelRight(InstrumentGroup::MasterBus);
 
@@ -1174,11 +1174,11 @@ VstiStripComponent::VstiStripComponent(MixerController &mc,
   loadIcon();
 
   setLookAndFeel(&mixerLAF);
-  startTimerHz(60);
+
 }
 
 VstiStripComponent::~VstiStripComponent() {
-  stopTimer();
+
   muteButton.removeListener(this);
   soloButton.removeListener(this);
   gainKnob.removeListener(this);
@@ -1210,7 +1210,7 @@ void VstiStripComponent::paintOverChildren(juce::Graphics &g) {
   }
 }
 
-void VstiStripComponent::timerCallback() {
+void VstiStripComponent::updateMeter() {
   meter.setLevel(audioGraphManager.getVstiPeak(slotIndex));
   meter.decayPeak();
 }
@@ -1370,11 +1370,11 @@ void VstiStripComponent::updateStateFromController() {
 
     bool isBypassed = mixerController.getTrackAuxSendBypass(vstiGroup, i);
     auxSends[i].setColour(juce::Slider::rotarySliderOutlineColourId,
-                          isBypassed ? juce::Colours::grey
-                                     : juce::Colours::white);
+                          isBypassed ? juce::Colour(60, 60, 65)
+                                     : juce::Colour(90, 95, 105));
     auxSends[i].setColour(juce::Slider::rotarySliderFillColourId,
                           isBypassed ? juce::Colours::grey
-                                     : juce::Colour(0xff4a90e2));
+                                     : juce::Colour(120, 180, 255));
     auxSends[i].setTooltip(isBypassed ? "Bypassed (Right-click to enable)"
                                       : "Right-click to bypass");
   }
@@ -1513,6 +1513,7 @@ void MixerComponent::toggleLayout() {
 MixerComponent::MixerComponent(MixerController &mc, AudioGraphManager &agm)
     : mixerController(mc), audioGraphManager(agm), masterStrip(mc, agm),
       content(trackStrips), sideDocks(fxStrips, masterStrip) {
+  startTimerHz(60);
   addAndMakeVisible(header);
 
   // --- VSTi 1-8 Output Strips ---
@@ -1576,24 +1577,40 @@ MixerComponent::MixerComponent(MixerController &mc, AudioGraphManager &agm)
   updateStripVisibility();
 }
 
-MixerComponent::~MixerComponent() {}
+MixerComponent::~MixerComponent() {
+  stopTimer();}
 
 void MixerComponent::paint(juce::Graphics &g) {
   g.fillAll(juce::Colour(0xff111113));
 }
 
 void MixerComponent::resized() {
-  auto area = getLocalBounds();
-  header.setBounds(area.removeFromTop(44));
+  if (getWidth() == 0 || getHeight() < 44)
+    return;
 
   const int stripW = 76;
   const int masterW = 104;
-  const int sideW = (int)fxStrips.size() * stripW + masterW; // 3 FX + 1 Master
+  const int sideW = (int)fxStrips.size() * stripW + masterW;
+  const int headerH = 44;
+  const int bodyH = getHeight() - headerH;
+
+  // Count how many channel strips are visible
+  int visibleCount = 0;
+  for (auto *c : content.getChildren()) {
+    if (c->isVisible())
+      ++visibleCount;
+  }
+  int visibleWidth = visibleCount * stripW;
+  content.setSize(visibleWidth, bodyH);
+
+  // Layout against the window bounds:
+  //   - header at top
+  //   - sideDocks (FX + Master) anchored to the RIGHT edge
+  //   - viewport (scrollable instrument strips) fills the LEFT remainder
+  auto area = getLocalBounds();
+  header.setBounds(area.removeFromTop(headerH));
   sideDocks.setBounds(area.removeFromRight(sideW));
   viewport.setBounds(area);
-
-  content.setSize(((int)trackStrips.size() + (int)vstiStrips.size()) * stripW,
-                  area.getHeight());
 }
 
 void MixerComponent::updateAllStrips() {
@@ -1650,6 +1667,47 @@ void MixerComponent::updateStripVisibility() {
   // Trigger content area resize to reflow visible strips
   content.resized();
   resized();
+
+  // Dynamically resize the window to fit the strips to avoid black gaps
+  if (auto *dw = findParentComponentOfClass<juce::DocumentWindow>()) {
+    const int stripW = 76;
+    const int masterW = 104;
+    const int sideW = (int)fxStrips.size() * stripW + masterW;
+
+    int visibleWidth = 0;
+    for (auto *c : content.getChildren()) {
+      if (c->isVisible()) {
+        visibleWidth += stripW;
+      }
+    }
+
+    // Calculate required width + a little padding if necessary
+    // (viewport scrollbar might appear if we limit width, but here we size to fit exactly)
+    int desiredWidth = visibleWidth + sideW;
+
+    // Always use exactly the required width, up to a reasonable maximum
+    int maxWidth = 1380;
+    int newWidth = juce::jmin(desiredWidth, maxWidth);
+
+    // Only center and resize if the width actually changed to avoid jitter,
+    // or just apply it. The getHeight() remains the same (e.g. 500 or 340 based on layout).
+    if (dw->getWidth() != newWidth) {
+      dw->centreWithSize(newWidth, isExpandedLayout ? 500 : 340);
+    }
+  }
+}
+
+int MixerComponent::getRequiredWidth() const {
+  const int stripW = 76;
+  const int masterW = 104;
+  const int sideW = (int)fxStrips.size() * stripW + masterW;
+  int visibleWidth = 0;
+  for (auto *c : content.getChildren()) {
+    if (c->isVisible()) {
+      visibleWidth += stripW;
+    }
+  }
+  return juce::jmin(1380, visibleWidth + sideW);
 }
 
 //--
@@ -1716,4 +1774,11 @@ void MixerComponent::HeaderComponent::resized() {
   layoutButton.setBounds(area.removeFromRight(72));
   area.removeFromRight(6);
   saveButton.setBounds(area.removeFromRight(64));
+}
+
+void MixerComponent::timerCallback() {
+  for (auto* strip : trackStrips) strip->updateMeter();
+  for (auto* strip : fxStrips) strip->updateMeter();
+  for (auto* strip : vstiStrips) strip->updateMeter();
+  masterStrip.updateMeter();
 }

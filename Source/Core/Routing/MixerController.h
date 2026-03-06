@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <JuceHeader.h>
 #include <atomic>
 #include <map>
@@ -212,7 +212,7 @@ public:
 
 private:
   std::map<InstrumentGroup, TrackState> tracks;
-  bool anySoloActive = false;
+  std::atomic<bool> anySoloActive{false};
   void updateSoloState();
   juce::CriticalSection lock;
 

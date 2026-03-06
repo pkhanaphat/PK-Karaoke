@@ -1,9 +1,10 @@
-﻿#pragma once
+#pragma once
 
 #include "Audio/AudioGraphManager.h"
 #include "Core/Routing/MixerController.h"
 #include "UI/MixerComponent.h"
 #include <JuceHeader.h>
+#include <juce_opengl/juce_opengl.h>
 
 class SynthMixerWindow : public juce::DocumentWindow {
 public:
@@ -15,11 +16,19 @@ public:
                 juce::ResizableWindow::backgroundColourId),
             DocumentWindow::allButtons) {
     setUsingNativeTitleBar(false);
-    setContentOwned(new MixerComponent(mc, agm), true);
+    MixerComponent *mixer = new MixerComponent(mc, agm);
+    int requiredW = mixer->getRequiredWidth();
+    setContentOwned(mixer, true);
     setResizable(false, false);
     setAlwaysOnTop(true);
 
-    centreWithSize(1350, 500);
+    openGLContext.attachTo(*this);
+
+    centreWithSize(requiredW, 500);
+  }
+
+  ~SynthMixerWindow() override {
+      openGLContext.detach();
   }
 
   MixerComponent &getMixerComponent() {
@@ -32,5 +41,6 @@ public:
   }
 
 private:
+  juce::OpenGLContext openGLContext;
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SynthMixerWindow)
 };
