@@ -136,7 +136,8 @@ void MidiPlayer::getNextAudioBlock(juce::MidiBuffer &outputBuffer,
   if (!playing || midiSequence.getNumEvents() == 0)
     return;
 
-  const juce::ScopedLock sl(lock);
+  // No lock here: midiSequence is only modified during loadMidiFile() which
+  // is always called from the message thread before playback begins.
 
   // Calculate how much time this buffer represents
   double bufferDurationSeconds = numSamples / sampleRate;
@@ -160,15 +161,9 @@ void MidiPlayer::getNextAudioBlock(juce::MidiBuffer &outputBuffer,
     nextEventIndex++;
   }
 
-  if (outputBuffer.getNumEvents() > 0)
-    DBG("MidiPlayer: Pushed " << outputBuffer.getNumEvents()
-                              << " events to buffer");
-
   currentPositionSeconds = endPositionSeconds;
 
   if (currentPositionSeconds >= durationSeconds) {
-    DBG("MidiPlayer: Reached end of duration (" << durationSeconds
-                                                << "s). Stopping playback.");
     playing = false; // Finished playback
     reachedEnd = true;
   }

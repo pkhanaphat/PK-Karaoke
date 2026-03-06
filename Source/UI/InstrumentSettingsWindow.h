@@ -206,7 +206,7 @@ public:
                                           actualPath); // Save absolute path
         }
 
-        audioGraphManager.rebuildGraphRouting();
+        audioGraphManager.triggerRebuild();
 
         if (onSettingsChanged)
           onSettingsChanged();

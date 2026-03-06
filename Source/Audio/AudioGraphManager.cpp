@@ -18,6 +18,9 @@ public:
   void prepareToPlay(double, int) override {}
   void releaseResources() override {}
 
+  // Called after rebuildGraphRouting to invalidate the drum routing cache
+  void setRoutingDirty() { routingDirty = true; }
+
   void processBlock(juce::AudioBuffer<float> &buffer,
                     juce::MidiBuffer &midiMessages) override {
     buffer.clear();
@@ -42,17 +45,20 @@ public:
         if (msg.isNoteOnOrOff()) {
           group = MidiHelper::getInstrumentDrumType(msg.getNoteNumber());
         } else {
-          // Pass through CC/Pitch for drums if any drum group is routed here
-          bool anyDrumRouted = false;
-          for (int n = 0; n < 128; ++n) {
-            InstrumentGroup g = MidiHelper::getInstrumentDrumType(n);
-            if (mixerController.getTrackOutputDestination(g) ==
-                targetDestination) {
-              anyDrumRouted = true;
-              break;
+          // Use cached result — rebuild only when routing changes (dirty flag)
+          if (routingDirty) {
+            anyDrumRoutedCache = false;
+            for (int n = 0; n < 128; ++n) {
+              InstrumentGroup g = MidiHelper::getInstrumentDrumType(n);
+              if (mixerController.getTrackOutputDestination(g) ==
+                  targetDestination) {
+                anyDrumRoutedCache = true;
+                break;
+              }
             }
+            routingDirty = false;
           }
-          if (anyDrumRouted)
+          if (anyDrumRoutedCache)
             filtered.addEvent(msg, metadata.samplePosition);
           continue;
         }
@@ -72,8 +78,10 @@ public:
 
           if (msg.isNoteOn()) {
             float velocity = msg.getFloatVelocity();
-            vstiSimulatedPeaks[group] =
-                std::max(vstiSimulatedPeaks[group], velocity);
+            int gIdx = static_cast<int>(group);
+            if (gIdx >= 0 && gIdx < (int)vstiSimulatedPeaks.size())
+              vstiSimulatedPeaks[gIdx] =
+                  std::max(vstiSimulatedPeaks[gIdx], velocity);
           }
         }
       }
@@ -85,12 +93,12 @@ public:
       InstrumentGroup group = static_cast<InstrumentGroup>(i);
       if (mixerController.getTrackOutputDestination(group) ==
           targetDestination) {
-        float peak = vstiSimulatedPeaks[group];
+        float peak = vstiSimulatedPeaks[i];
         if (peak > 0.001f) {
           mixerController.setTrackLevel(group, peak, peak);
-          vstiSimulatedPeaks[group] *= 0.85f; // Decay by 15% per block
+          vstiSimulatedPeaks[i] *= 0.85f; // Decay by 15% per block
         } else {
-          vstiSimulatedPeaks[group] = 0.0f;
+          vstiSimulatedPeaks[i] = 0.0f;
           mixerController.setTrackLevel(group, 0.0f, 0.0f);
         }
       }
@@ -116,7 +124,12 @@ private:
   MixerController &mixerController;
   OutputDestination targetDestination;
   int channelPrograms[16] = {0};
-  std::map<InstrumentGroup, float> vstiSimulatedPeaks;
+  // Flat array instead of std::map to avoid O(log n) per-block lookup
+  std::array<float, 256> vstiSimulatedPeaks{};
+  // Cached drum routing flag — recomputed only when routing changes
+  bool anyDrumRoutedCache = false;
+  std::atomic<bool> routingDirty{
+      true}; // start dirty so first block computes it
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiFilterProcessor)
 };
 
@@ -174,6 +187,183 @@ private:
   InstrumentGroup group;
   juce::String busName;
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AuxBusProcessor)
+};
+
+//==============================================================================
+// VstiSplitProcessor — converts stereo VSTi output to 8 channels (Main+FX
+// Sends)
+//==============================================================================
+class VstiSplitProcessor : public juce::AudioProcessor {
+public:
+  VstiSplitProcessor(MixerController &mc, InstrumentGroup g)
+      : AudioProcessor(
+            BusesProperties()
+                .withInput("Input", juce::AudioChannelSet::stereo(), true)
+                .withOutput("Output", juce::AudioChannelSet::stereo(), true)
+                .withOutput("FX1", juce::AudioChannelSet::stereo(), true)
+                .withOutput("FX2", juce::AudioChannelSet::stereo(), true)
+                .withOutput("FX3", juce::AudioChannelSet::stereo(), true)),
+        mixerController(mc), group(g) {}
+
+  ~VstiSplitProcessor() override = default;
+
+  void prepareToPlay(double, int) override {}
+  void releaseResources() override {}
+
+  void processBlock(juce::AudioBuffer<float> &buffer,
+                    juce::MidiBuffer &) override {
+    const int numSamples = buffer.getNumSamples();
+
+    if (buffer.getNumChannels() >= 2) {
+      // Copy stereo input to all 8 output channels
+      // Output (0,1), FX1 (2,3), FX2 (4,5), FX3 (6,7)
+      for (int auxIdx = 0; auxIdx < 3; ++auxIdx) {
+        int startChannel = 2 + (auxIdx * 2);
+        if (buffer.getNumChannels() >= startChannel + 2) {
+          buffer.copyFrom(startChannel, 0, buffer, 0, 0, numSamples);
+          buffer.copyFrom(startChannel + 1, 0, buffer, 1, 0, numSamples);
+        }
+      }
+    }
+  }
+
+  juce::AudioProcessorEditor *createEditor() override { return nullptr; }
+  bool hasEditor() const override { return false; }
+  const juce::String getName() const override { return "VSTi Split"; }
+  bool acceptsMidi() const override { return false; }
+  bool producesMidi() const override { return false; }
+  bool isMidiEffect() const override { return false; }
+  double getTailLengthSeconds() const override { return 0.0; }
+  int getNumPrograms() override { return 1; }
+  int getCurrentProgram() override { return 0; }
+  void setCurrentProgram(int) override {}
+  const juce::String getProgramName(int) override { return {}; }
+  void changeProgramName(int, const juce::String &) override {}
+  void getStateInformation(juce::MemoryBlock &) override {}
+  void setStateInformation(const void *, int) override {}
+
+private:
+  MixerController &mixerController;
+  InstrumentGroup group;
+  JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VstiSplitProcessor)
+};
+
+//==============================================================================
+// FxWrapperProcessor — seamlessly wraps a VST plugin avoiding graph rebuilds
+//==============================================================================
+class FxWrapperProcessor : public juce::AudioProcessor {
+public:
+  FxWrapperProcessor(MixerController &mc, InstrumentGroup g, int slot)
+      : AudioProcessor(
+            BusesProperties()
+                .withInput("Input", juce::AudioChannelSet::stereo(), true)
+                .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
+        mixerController(mc), group(g), slotIndex(slot) {}
+
+  ~FxWrapperProcessor() override {
+    auto *p = plugin.exchange(nullptr);
+    if (p)
+      delete p;
+  }
+
+  void prepareToPlay(double sampleRate,
+                     int maximumExpectedSamplesPerBlock) override {
+    if (auto *p = plugin.load()) {
+      p->prepareToPlay(sampleRate, maximumExpectedSamplesPerBlock);
+    }
+    cachedSampleRate = sampleRate;
+    cachedBlockSize = maximumExpectedSamplesPerBlock;
+  }
+
+  void releaseResources() override {
+    if (auto *p = plugin.load()) {
+      p->releaseResources();
+    }
+  }
+
+  void processBlock(juce::AudioBuffer<float> &buffer,
+                    juce::MidiBuffer &midiMessages) override {
+    if (auto *p = plugin.load()) {
+      if (!mixerController.getVstPluginBypass(group, slotIndex)) {
+        // Optimization: skip processing if the buffer is essentially silent
+        if (buffer.getMagnitude(0, buffer.getNumSamples()) < 0.00001f)
+          return;
+
+        if (p->getTotalNumOutputChannels() >= buffer.getNumChannels() &&
+            p->getTotalNumInputChannels() >= buffer.getNumChannels()) {
+          p->processBlock(buffer, midiMessages);
+        }
+        return;
+      }
+    }
+  }
+
+  void loadPlugin(std::unique_ptr<juce::AudioPluginInstance> newPlugin) {
+    if (newPlugin) {
+      if (cachedSampleRate > 0.0 && cachedBlockSize > 0) {
+        newPlugin->prepareToPlay(cachedSampleRate, cachedBlockSize);
+      }
+    }
+    auto *oldPlugin = plugin.exchange(newPlugin.release());
+    if (oldPlugin) {
+      delete oldPlugin;
+    }
+  }
+
+  void removePlugin() {
+    auto *oldPlugin = plugin.exchange(nullptr);
+    if (oldPlugin) {
+      delete oldPlugin;
+    }
+  }
+
+  juce::AudioPluginInstance *getLoadedPlugin() const { return plugin.load(); }
+
+  juce::AudioProcessorEditor *createEditor() override {
+    if (auto *p = plugin.load())
+      return p->createEditorIfNeeded();
+    return nullptr;
+  }
+  bool hasEditor() const override {
+    if (auto *p = plugin.load())
+      return p->hasEditor();
+    return false;
+  }
+  const juce::String getName() const override {
+    if (auto *p = plugin.load())
+      return p->getName();
+    return "Empty Slot";
+  }
+  bool acceptsMidi() const override { return true; }
+  bool producesMidi() const override { return true; }
+  bool isMidiEffect() const override { return false; }
+  double getTailLengthSeconds() const override {
+    if (auto *p = plugin.load())
+      return p->getTailLengthSeconds();
+    return 0.0;
+  }
+  int getNumPrograms() override { return 1; }
+  int getCurrentProgram() override { return 0; }
+  void setCurrentProgram(int) override {}
+  const juce::String getProgramName(int) override { return {}; }
+  void changeProgramName(int, const juce::String &) override {}
+  void getStateInformation(juce::MemoryBlock &destData) override {
+    if (auto *p = plugin.load())
+      p->getStateInformation(destData);
+  }
+  void setStateInformation(const void *data, int sizeInBytes) override {
+    if (auto *p = plugin.load())
+      p->setStateInformation(data, sizeInBytes);
+  }
+
+private:
+  MixerController &mixerController;
+  InstrumentGroup group;
+  int slotIndex;
+  std::atomic<juce::AudioPluginInstance *> plugin{nullptr};
+  double cachedSampleRate = 0.0;
+  int cachedBlockSize = 0;
+  JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FxWrapperProcessor)
 };
 
 //==============================================================================
@@ -235,10 +425,16 @@ public:
         // graph.
         if (buffer.getNumChannels() >= startChannel + 2) {
           if (sendLevel > 0.001f) {
-            buffer.copyFrom(startChannel, 0, buffer, 0, 0, numSamples);
-            buffer.applyGain(startChannel, 0, numSamples, sendLevel);
-            buffer.copyFrom(startChannel + 1, 0, buffer, 1, 0, numSamples);
-            buffer.applyGain(startChannel + 1, 0, numSamples, sendLevel);
+            // SIMD Optimization: direct multiply into the send channels
+            auto *srcL = buffer.getReadPointer(0);
+            auto *srcR = buffer.getReadPointer(1);
+            auto *dstL = buffer.getWritePointer(startChannel);
+            auto *dstR = buffer.getWritePointer(startChannel + 1);
+
+            juce::FloatVectorOperations::copyWithMultiply(dstL, srcL, sendLevel,
+                                                          numSamples);
+            juce::FloatVectorOperations::copyWithMultiply(dstR, srcR, sendLevel,
+                                                          numSamples);
           } else {
             buffer.clear(startChannel, 0, numSamples);
             buffer.clear(startChannel + 1, 0, numSamples);
@@ -397,6 +593,40 @@ void AudioGraphManager::initialiseGraph() {
   masterBusNode = mainGraph.addNode(std::make_unique<TrackProcessor>(
       mixerController, InstrumentGroup::MasterBus));
 
+  // Pre-allocate FxWrapperProcessor nodes for all static groups:
+  // VSTi slots, Aux/Master buses, AND all SF2 melodic/drum groups.
+  // This prevents graph rebuild stutter when the user loads FX.
+  std::vector<InstrumentGroup> staticGroups = {
+      // 8 VSTi output groups
+      InstrumentGroup::VSTi1,
+      InstrumentGroup::VSTi2,
+      InstrumentGroup::VSTi3,
+      InstrumentGroup::VSTi4,
+      InstrumentGroup::VSTi5,
+      InstrumentGroup::VSTi6,
+      InstrumentGroup::VSTi7,
+      InstrumentGroup::VSTi8,
+      // Aux & Master buses
+      InstrumentGroup::ReverbBus,
+      InstrumentGroup::DelayBus,
+      InstrumentGroup::ChorusBus,
+      InstrumentGroup::MasterBus,
+  };
+  // All SF2 melodic groups (Piano=0 .. Percussive=27)
+  for (int i = 0; i <= static_cast<int>(InstrumentGroup::Percussive); ++i)
+    staticGroups.push_back(static_cast<InstrumentGroup>(i));
+  // All SF2 drum groups (Kick=100 .. PercussionDrum=115)
+  for (int i = static_cast<int>(InstrumentGroup::Kick);
+       i <= static_cast<int>(InstrumentGroup::PercussionDrum); ++i)
+    staticGroups.push_back(static_cast<InstrumentGroup>(i));
+
+  for (auto g : staticGroups) {
+    for (int slot = 0; slot < 4; ++slot) {
+      fxNodes[g][slot] = mainGraph.addNode(
+          std::make_unique<FxWrapperProcessor>(mixerController, g, slot));
+    }
+  }
+
   DBG("AudioGraphManager: Graph initialized. Output channels: "
       << mainGraph.getTotalNumOutputChannels());
 }
@@ -440,7 +670,7 @@ bool AudioGraphManager::loadVstiPlugin(int slotIndex,
       mixerController, static_cast<OutputDestination>(slotIndex + 1)));
   vstiFilterNodes[slotIndex] = filterNode;
 
-  rebuildGraphRouting();
+  triggerRebuild();
   return true;
 }
 
@@ -461,7 +691,14 @@ void AudioGraphManager::removeVstiPlugin(int slotIndex) {
     mainGraph.removeNode(fit->second.get());
     vstiFilterNodes.erase(fit);
   }
-  rebuildGraphRouting();
+
+  auto sit = vstiSplitNodes.find(slotIndex);
+  if (sit != vstiSplitNodes.end()) {
+    mainGraph.removeNode(sit->second.get());
+    vstiSplitNodes.erase(sit);
+  }
+
+  triggerRebuild();
 }
 
 // คลาสเสริมสำหรับแสดง UI ของ Plugin ที่จะลบตัวเองทิ้งเมื่อกดปุ่ม X
@@ -489,9 +726,10 @@ public:
   void closeButtonPressed() override {
     // ปิดหน้าต่างอย่างปลอดภัยโดยให้ MessageManager เป็นผู้ลบ
     setVisible(false);
-    juce::MessageManager::callAsync([c = juce::Component::SafePointer<juce::Component>(this)] {
-      delete c.getComponent();
-    });
+    juce::MessageManager::callAsync(
+        [c = juce::Component::SafePointer<juce::Component>(this)] {
+          delete c.getComponent();
+        });
   }
 };
 
@@ -555,17 +793,48 @@ bool AudioGraphManager::loadVstFxPlugin(InstrumentGroup group, int slotIndex,
     return false;
   }
 
-  removeVstFxPlugin(group, slotIndex);
+  // Close any existing editor window
+  if (fxWindows[group][slotIndex] != nullptr) {
+    delete fxWindows[group][slotIndex].getComponent();
+  }
 
-  auto fxNode = mainGraph.addNode(std::move(instance));
-  fxNodes[group][slotIndex] = fxNode;
+  // Get or lazily create a wrapper node for this slot.
+  // VSTi/Aux/Master slots are pre-allocated at startup. SF2 channel groups
+  // create their wrapper the first time an FX is inserted (one-time rebuild).
+  juce::AudioProcessorGraph::Node::Ptr fxNode = fxNodes[group][slotIndex];
+  if (fxNode == nullptr) {
+    auto wrapper =
+        std::make_unique<FxWrapperProcessor>(mixerController, group, slotIndex);
+    fxNode = mainGraph.addNode(std::move(wrapper));
+    fxNodes[group][slotIndex] = fxNode;
+    // Wire this new node into the graph (one-time stutter on first FX insert)
+    triggerRebuild();
+  }
+
+  if (auto *wrapper =
+          dynamic_cast<FxWrapperProcessor *>(fxNode->getProcessor())) {
+    wrapper->loadPlugin(std::move(instance));
+  }
 
   // Save state in MixerController
   mixerController.setVstPluginPath(group, slotIndex, pluginPath);
   mixerController.setVstPluginBypass(group, slotIndex, false);
 
-  rebuildGraphRouting();
   return true;
+}
+
+void AudioGraphManager::setVstFxBypass(InstrumentGroup group, int slotIndex,
+                                       bool bypass) {
+  if (auto node = fxNodes[group][slotIndex]) {
+    node->setBypassed(bypass);
+  }
+}
+
+void AudioGraphManager::setVstiBypass(int slotIndex, bool bypass) {
+  auto it = vstiNodes.find(slotIndex);
+  if (it != vstiNodes.end() && it->second != nullptr) {
+    it->second->setBypassed(bypass);
+  }
 }
 
 void AudioGraphManager::removeVstFxPlugin(InstrumentGroup group,
@@ -575,12 +844,13 @@ void AudioGraphManager::removeVstFxPlugin(InstrumentGroup group,
   }
 
   if (auto node = fxNodes[group][slotIndex]) {
-    mainGraph.removeNode(node.get());
-    fxNodes[group][slotIndex] = nullptr;
+    if (auto *wrapper =
+            dynamic_cast<FxWrapperProcessor *>(node->getProcessor())) {
+      wrapper->removePlugin();
+    }
   }
 
   mixerController.setVstPluginPath(group, slotIndex, "");
-  rebuildGraphRouting();
 }
 
 void AudioGraphManager::openVstFxPluginEditor(InstrumentGroup group,
@@ -589,7 +859,11 @@ void AudioGraphManager::openVstFxPluginEditor(InstrumentGroup group,
   if (node == nullptr)
     return;
 
-  auto *processor = node->getProcessor();
+  auto *wrapper = dynamic_cast<FxWrapperProcessor *>(node->getProcessor());
+  if (!wrapper)
+    return;
+
+  auto *processor = wrapper->getLoadedPlugin();
   if (!processor)
     return;
 
@@ -628,7 +902,7 @@ void AudioGraphManager::setSoundFont(const juce::File &sf2File) {
   }
 
   // Ensure routing is maintained after a synth is constructed or updated.
-  rebuildGraphRouting();
+  triggerRebuild();
 }
 
 void AudioGraphManager::resetSynthesizers() {
@@ -694,8 +968,11 @@ void AudioGraphManager::getNextAudioBlock(juce::AudioBuffer<float> &buffer,
   // But AudioProcessorGraph is prepared with 2 inputs and 2 outputs.
   // We MUST process into a guaranteed 2-in/2-out buffer to avoid silent
   // rejection.
-  if (graphBuffer.getNumSamples() < numSamples) { graphBuffer.setSize(2, numSamples, false, true, true); }
-  juce::AudioBuffer<float> localGraphBuffer(graphBuffer.getArrayOfWritePointers(), 2, numSamples);
+  if (graphBuffer.getNumSamples() < numSamples) {
+    graphBuffer.setSize(2, numSamples, false, true, true);
+  }
+  juce::AudioBuffer<float> localGraphBuffer(
+      graphBuffer.getArrayOfWritePointers(), 2, numSamples);
   localGraphBuffer.clear();
 
   // Process the entire graph normally!
@@ -704,21 +981,14 @@ void AudioGraphManager::getNextAudioBlock(juce::AudioBuffer<float> &buffer,
 
   // Copy the processed stereo audio back into the actual destination buffer
   buffer.clear();
-  for (int i = 0;
-       i < juce::jmin(buffer.getNumChannels(), localGraphBuffer.getNumChannels());
+  for (int i = 0; i < juce::jmin(buffer.getNumChannels(),
+                                 localGraphBuffer.getNumChannels());
        ++i) {
     buffer.copyFrom(i, 0, localGraphBuffer, i, 0, numSamples);
   }
 
-  static int emptyCounter = 0;
-  if (localGraphBuffer.getMagnitude(0, localGraphBuffer.getNumSamples()) < 0.0001f) {
-    if (++emptyCounter % 500 == 0)
-      DBG("AudioGraphManager: Buffer is silent after processing.");
-  } else {
-    if (emptyCounter > 0)
-      DBG("AudioGraphManager: Buffer has AUDIO from Graph!");
-    emptyCounter = 0;
-  }
+  // (Debug audio-silence diagnostic removed — DBG on audio thread causes
+  // stalls)
 }
 
 void AudioGraphManager::rebuildGraphRouting() {
@@ -786,7 +1056,7 @@ void AudioGraphManager::rebuildGraphRouting() {
     }
   }
 
-  // 2. Clear old split nodes
+  // 2. Clear old split nodes (both synth and VSTi)
   for (auto &pair : splitSynthNodes) {
     if (pair.second != nullptr) {
       mainGraph.removeNode(pair.second.get());
@@ -801,21 +1071,27 @@ void AudioGraphManager::rebuildGraphRouting() {
   }
   splitFilterNodes.clear();
 
-  // Find which InstrumentGroups need their own SF2Source (because they have FX)
+  // Clear old VSTi split nodes
+  for (auto &pair : vstiSplitNodes) {
+    if (pair.second != nullptr) {
+      mainGraph.removeNode(pair.second.get());
+    }
+  }
+  vstiSplitNodes.clear();
+
+  // Every SF2-routed InstrumentGroup gets its own SF2Source (via tsf_copy()),
+  // TrackProcessor (Volume/Pan/Send), and 4 FxWrapper Insert slots.
+  // This is intentional: it gives per-channel FX, Volume, Pan, and Aux Sends.
   std::vector<InstrumentGroup> splittedGroups;
   for (int i = 0; i <= (int)InstrumentGroup::PercussionDrum; ++i) {
+    // Skip drum-bus index gap (28-99 are not valid melodic/drum groups)
+    if (i > (int)InstrumentGroup::Percussive &&
+        i < (int)InstrumentGroup::Kick)
+      continue;
     auto group = static_cast<InstrumentGroup>(i);
-    bool hasFx = false;
-    for (int slot = 0; slot < 4; ++slot) {
-      if (fxNodes[group][slot] != nullptr) {
-        hasFx = true;
-        break;
-      }
-    }
-
-    // Only split if routed to SF2 and has FX
-    if (hasFx && mixerController.getTrackOutputDestination(group) ==
-                     OutputDestination::SF2) {
+    // Split if routed to SF2 (always — so every group has its own chain)
+    if (mixerController.getTrackOutputDestination(group) ==
+        OutputDestination::SF2) {
       splittedGroups.push_back(group);
 
       // Create dedicated Filter & Synth for this group
@@ -921,13 +1197,29 @@ void AudioGraphManager::rebuildGraphRouting() {
       }
 
       auto destNode = trackGainNodes[group];
+
+      // Route stereo (ch0-1) through Insert FX chain
       connectAudioChain(synthNode, group, destNode);
+
+      // Wire Aux Send channels (ch2-7) directly from SplitSynth to
+      // TrackProcessor. The Insert FX slots are stereo-only, so Aux Sends must
+      // bypass them entirely. TrackProcessor reads these as post-fader sends to
+      // route to the Aux Busses.
+      const int synthOutputs =
+          synthNode->getProcessor()->getTotalNumOutputChannels();
+      const int trackInputs =
+          destNode->getProcessor()->getTotalNumInputChannels();
+      for (int ch = 2; ch < 8 && ch < synthOutputs && ch < trackInputs; ++ch) {
+        mainGraph.addConnection(
+            {{synthNode->nodeID, ch}, {destNode->nodeID, ch}});
+      }
 
       // TrackProcessor -> Master Bus
       for (int ch = 0; ch < 2; ++ch) {
         mainGraph.addConnection(
             {{destNode->nodeID, ch}, {masterBusNode->nodeID, ch}});
       }
+      // TrackProcessor Aux Send outputs (ch2-7) -> Aux Busses
       connectAuxSends(destNode);
     }
   }
@@ -940,19 +1232,40 @@ void AudioGraphManager::rebuildGraphRouting() {
 
     auto vstiGroup = static_cast<InstrumentGroup>(
         static_cast<int>(InstrumentGroup::VSTi1) + slot);
+
+    // Create VSTi Split Node (expands 2-ch VSTi output to 8-ch with FX sends)
+    auto splitNode = mainGraph.addNode(
+        std::make_unique<VstiSplitProcessor>(mixerController, vstiGroup));
+    vstiSplitNodes[slot] = splitNode;
+
+    // Connect VSTi -> Split Node
+    for (int ch = 0; ch < 2; ++ch) {
+      mainGraph.addConnection(
+          {{pair.second->nodeID, ch}, {splitNode->nodeID, ch}});
+    }
+
+    // Get or create TrackProcessor for this VSTi slot
     auto destNode = trackGainNodes.count(vstiGroup) ? trackGainNodes[vstiGroup]
                                                     : masterBusNode;
 
-    connectAudioChain(pair.second, vstiGroup, destNode);
+    // Connect Split Node (8-ch) -> TrackProcessor (8-ch input)
+    for (int ch = 0;
+         ch < 8 && ch < splitNode->getProcessor()->getTotalNumOutputChannels();
+         ++ch) {
+      mainGraph.addConnection(
+          {{splitNode->nodeID, ch}, {destNode->nodeID, ch}});
+    }
 
+    // Connect TrackProcessor main out (ch 0-1) to Master Bus
     if (destNode != masterBusNode) {
-      // TrackProcessor -> Master Bus
       for (int ch = 0; ch < 2; ++ch) {
         mainGraph.addConnection(
             {{destNode->nodeID, ch}, {masterBusNode->nodeID, ch}});
       }
-      connectAuxSends(destNode);
     }
+
+    // Connect FX sends from TrackProcessor (ch 2-7) to Aux Buses
+    connectAuxSends(destNode);
   }
 
   // 6. Route Aux Returns
@@ -985,6 +1298,14 @@ void AudioGraphManager::rebuildGraphRouting() {
           {{masterBusNode->nodeID, ch}, {audioOutputNode->nodeID, ch}});
     }
   }
+
+  // Invalidate the cached drum routing in MidiFilterProcessor
+  // so next audio callback will rescan routing
+  if (globalFilterNode != nullptr) {
+    if (auto *mfp = dynamic_cast<MidiFilterProcessor *>(
+            globalFilterNode->getProcessor()))
+      mfp->setRoutingDirty();
+  }
 }
 
 void AudioGraphManager::getStateInformation(juce::MemoryBlock &destData) {}
@@ -1006,3 +1327,7 @@ float AudioGraphManager::getVstiPeak(int slotIndex) const {
   }
   return 0.0f;
 }
+
+// AsyncUpdater callback — called on message thread to debounce
+// routing rebuilds triggered from the UI
+void AudioGraphManager::handleAsyncUpdate() { rebuildGraphRouting(); }

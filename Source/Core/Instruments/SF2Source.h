@@ -5,6 +5,7 @@
 #include <JuceHeader.h>
 #include <functional>
 #include <optional>
+#include <unordered_set>
 
 /**
  * SF2Source — SoundFont (.sf2) Instrument สำหรับ PK Karaoke
@@ -29,7 +30,9 @@ public:
 
   void setExcludedGroups(const std::vector<InstrumentGroup> &groups) {
     const juce::ScopedLock sl(lock);
-    excludedGroups = groups;
+    excludedGroups.clear();
+    for (auto g : groups)
+      excludedGroups.insert(static_cast<int>(g));
   }
 
   void updateCustomSF2Routing(
@@ -62,6 +65,7 @@ private:
   tsf *mainSynth = nullptr;
   int channelPrograms[16] = {0};
   bool isDrumChannel[16] = {false};
+  int noteOriginGroup[16][128]; // [channel][noteNumber] = group index
 
   MixerController *mixer = nullptr;
   float currentVolume = 1.0f;
@@ -73,12 +77,18 @@ private:
   juce::HeapBlock<float> interleavedBuffer;
   juce::AudioBuffer<float> internalMixBuffer;
 
-  std::optional<InstrumentGroup> targetGroup;  // Only play this group
-  std::vector<InstrumentGroup> excludedGroups; // Do not play these groups
+  std::optional<InstrumentGroup> targetGroup; // Only play this group
+  // Audio thread excluded group set — use int as key for unordered_set
+  std::unordered_set<int> excludedGroups;
 
   std::map<InstrumentGroup, tsf *>
       activeSynths; // Dynamically allocated synths based on playing notes
   std::map<InstrumentGroup, tsf *> customSynths; // For custom SF2 per-track
+
+  // Pre-allocated render cache to avoid heap allocation every audio callback
+  std::vector<InstrumentGroup> groupsToRenderCache;
+  std::array<std::pair<float, float>, 256>
+      groupPeaksCache{}; // indexed by (int)group
 
   void freeSynths();
   tsf *getOrCreateSynthForGroup(InstrumentGroup group,

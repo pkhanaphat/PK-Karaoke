@@ -11,7 +11,8 @@
 
 struct tsf;
 
-class AudioGraphManager : public juce::AudioProcessor {
+class AudioGraphManager : public juce::AudioProcessor,
+                          private juce::AsyncUpdater {
 public:
   AudioGraphManager(MixerController &mc);
   ~AudioGraphManager() override;
@@ -45,6 +46,10 @@ public:
   void initialiseGraph();
   void rebuildGraphRouting();
 
+  // Safely triggers rebuildGraphRouting on the message thread, debouncing
+  // multiple consecutive calls into a single rebuild.
+  void triggerRebuild() { triggerAsyncUpdate(); }
+
   bool loadVstiPlugin(int slotIndex, const juce::String &pluginPath);
   bool loadVstiPlugin(int slotIndex, const juce::PluginDescription &desc);
   void removeVstiPlugin(int slotIndex);
@@ -54,6 +59,8 @@ public:
                        const juce::String &pluginPath);
   void removeVstFxPlugin(InstrumentGroup group, int slotIndex);
   void openVstFxPluginEditor(InstrumentGroup group, int slotIndex);
+  void setVstFxBypass(InstrumentGroup group, int slotIndex, bool bypass);
+  void setVstiBypass(int slotIndex, bool bypass);
 
   void setSoundFont(const juce::File &sf2File);
   void resetSynthesizers();
@@ -122,6 +129,7 @@ private:
 
   std::map<int, Node::Ptr> vstiNodes;
   std::map<int, Node::Ptr> vstiFilterNodes;
+  std::map<int, Node::Ptr> vstiSplitNodes;
   std::map<int, juce::Component::SafePointer<juce::DocumentWindow>> vstiWindows;
 
   std::map<juce::String, tsf *> sharedSoundFonts;
@@ -137,6 +145,10 @@ private:
   MixerController &mixerController;
   PluginHost pluginHost;
   juce::AudioBuffer<float> graphBuffer;
+
+  // Required by juce::AsyncUpdater — called on message thread to debounce
+  // multiple routing rebuild requests from the UI into a single call
+  void handleAsyncUpdate() override;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioGraphManager)
 };

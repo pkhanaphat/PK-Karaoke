@@ -59,7 +59,7 @@ void MixerController::setTrackAuxSend(InstrumentGroup group, int auxIndex,
                                       float linearGain) {
   if (auxIndex < 0 || auxIndex >= 3)
     return;
-  const juce::ScopedLock sl(lock);
+  // No lock needed: auxSends is std::atomic — safe from any thread
   tracks[group].auxSends[auxIndex].store(juce::jlimit(0.0f, 2.0f, linearGain));
 }
 
@@ -67,7 +67,7 @@ float MixerController::getTrackAuxSend(InstrumentGroup group,
                                        int auxIndex) const {
   if (auxIndex < 0 || auxIndex >= 3)
     return 0.0f;
-  const juce::ScopedLock sl(lock);
+  // No lock needed: auxSends is std::atomic — safe from audio thread
   auto it = tracks.find(group);
   return it != tracks.end() ? it->second.auxSends[auxIndex].load() : 0.0f;
 }
@@ -142,7 +142,7 @@ bool MixerController::getTrackAuxSendBypass(InstrumentGroup group,
                                             int auxIndex) const {
   if (auxIndex < 0 || auxIndex >= 3)
     return false;
-  const juce::ScopedLock sl(lock);
+  // No lock needed: auxSendsBypass is std::atomic — safe from audio thread
   auto it = tracks.find(group);
   return it != tracks.end() ? it->second.auxSendsBypass[auxIndex].load()
                             : false;
@@ -152,7 +152,7 @@ void MixerController::setTrackAuxSendBypass(InstrumentGroup group, int auxIndex,
                                             bool bypass) {
   if (auxIndex < 0 || auxIndex >= 3)
     return;
-  const juce::ScopedLock sl(lock);
+  // No lock needed: auxSendsBypass is std::atomic — safe from any thread
   tracks[group].auxSendsBypass[auxIndex].store(bypass);
 }
 

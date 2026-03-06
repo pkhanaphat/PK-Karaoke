@@ -152,10 +152,9 @@ ChannelStripComponent::ChannelStripComponent(MixerController &mc,
 
   updateStateFromController();
   setLookAndFeel(&mixerLAF);
-
 }
 
-ChannelStripComponent::~ChannelStripComponent() { }
+ChannelStripComponent::~ChannelStripComponent() {}
 
 void ChannelStripComponent::comboBoxChanged(juce::ComboBox * /*cb*/) {
   // SF2 and output routing is handled by InstrumentSettingsWindow
@@ -278,7 +277,7 @@ void ChannelStripComponent::buttonClicked(juce::Button *b) {
             [this, i]() {
               bool bypass = !mixerController.getVstPluginBypass(trackGroup, i);
               mixerController.setVstPluginBypass(trackGroup, i, bypass);
-              audioGraphManager.rebuildGraphRouting();
+              audioGraphManager.setVstFxBypass(trackGroup, i, bypass);
               updateStateFromController();
             });
         menu.addItem("Remove Plugin", [this, i]() {
@@ -349,6 +348,7 @@ void ChannelStripComponent::buttonClicked(juce::Button *b) {
 }
 
 void ChannelStripComponent::loadIcon() {
+  static std::map<juce::String, juce::Image> iconCache;
   juce::String iconName;
   switch (trackGroup) {
   // Melodic
@@ -492,6 +492,11 @@ void ChannelStripComponent::loadIcon() {
     break;
   }
 
+  if (iconCache.find(iconName) != iconCache.end()) {
+    instrumentIcon = iconCache[iconName];
+    return;
+  }
+
   juce::File folder =
       juce::File::getSpecialLocation(juce::File::currentExecutableFile)
           .getParentDirectory();
@@ -499,10 +504,14 @@ void ChannelStripComponent::loadIcon() {
     auto f = folder.getChildFile("Instruments").getChildFile(iconName);
     if (f.existsAsFile()) {
       instrumentIcon = juce::ImageCache::getFromFile(f);
+      iconCache[iconName] = instrumentIcon;
       return;
     }
     folder = folder.getParentDirectory();
   }
+
+  // If not found, cache empty to avoid further searches
+  iconCache[iconName] = instrumentIcon;
 }
 
 void ChannelStripComponent::paint(juce::Graphics &g) {
@@ -649,10 +658,9 @@ FXStripComponent::FXStripComponent(MixerController &mc, AudioGraphManager &agm,
 
   setLookAndFeel(&mixerLAF);
   loadIcon();
-
 }
 
-FXStripComponent::~FXStripComponent() { }
+FXStripComponent::~FXStripComponent() {}
 
 void FXStripComponent::updateMeter() {
   // Use left peak for the single meter representation
@@ -683,7 +691,7 @@ void FXStripComponent::buttonClicked(juce::Button *b) {
             [this, i]() {
               bool bypass = !mixerController.getVstPluginBypass(fxGroup, i);
               mixerController.setVstPluginBypass(fxGroup, i, bypass);
-              audioGraphManager.rebuildGraphRouting();
+              audioGraphManager.setVstFxBypass(fxGroup, i, bypass);
             });
         menu.addItem("Remove Plugin", [this, i]() {
           audioGraphManager.removeVstFxPlugin(fxGroup, i);
@@ -881,7 +889,7 @@ MasterStripComponent::MasterStripComponent(MixerController &mc,
   repaint();
 }
 
-MasterStripComponent::~MasterStripComponent() { }
+MasterStripComponent::~MasterStripComponent() {}
 
 void MasterStripComponent::updateMeter() {
   float peakL = mixerController.getTrackLevelLeft(InstrumentGroup::MasterBus);
@@ -917,7 +925,7 @@ void MasterStripComponent::buttonClicked(juce::Button *b) {
             [this, i, masterGroup]() {
               bool bypass = !mixerController.getVstPluginBypass(masterGroup, i);
               mixerController.setVstPluginBypass(masterGroup, i, bypass);
-              audioGraphManager.rebuildGraphRouting();
+              audioGraphManager.setVstFxBypass(masterGroup, i, bypass);
             });
         menu.addItem("Remove Plugin", [this, i, masterGroup]() {
           audioGraphManager.removeVstFxPlugin(masterGroup, i);
@@ -1174,7 +1182,6 @@ VstiStripComponent::VstiStripComponent(MixerController &mc,
   loadIcon();
 
   setLookAndFeel(&mixerLAF);
-
 }
 
 VstiStripComponent::~VstiStripComponent() {
@@ -1253,7 +1260,7 @@ void VstiStripComponent::buttonClicked(juce::Button *b) {
             [this, i, vstiGroup]() {
               bool bypass = !mixerController.getVstPluginBypass(vstiGroup, i);
               mixerController.setVstPluginBypass(vstiGroup, i, bypass);
-              audioGraphManager.rebuildGraphRouting();
+              audioGraphManager.setVstFxBypass(vstiGroup, i, bypass);
               updateStateFromController();
             });
         menu.addItem("Remove Plugin", [this, i, vstiGroup]() {
@@ -1513,7 +1520,8 @@ void MixerComponent::toggleLayout() {
 MixerComponent::MixerComponent(MixerController &mc, AudioGraphManager &agm)
     : mixerController(mc), audioGraphManager(agm), masterStrip(mc, agm),
       content(trackStrips), sideDocks(fxStrips, masterStrip) {
-  startTimerHz(60);
+  startTimerHz(30); // 30Hz is sufficient for smooth meter response; halves
+                    // repaint load vs 60Hz
   addAndMakeVisible(header);
 
   // --- VSTi 1-8 Output Strips ---
@@ -1577,8 +1585,7 @@ MixerComponent::MixerComponent(MixerController &mc, AudioGraphManager &agm)
   updateStripVisibility();
 }
 
-MixerComponent::~MixerComponent() {
-  stopTimer();}
+MixerComponent::~MixerComponent() { stopTimer(); }
 
 void MixerComponent::paint(juce::Graphics &g) {
   g.fillAll(juce::Colour(0xff111113));
@@ -1682,7 +1689,8 @@ void MixerComponent::updateStripVisibility() {
     }
 
     // Calculate required width + a little padding if necessary
-    // (viewport scrollbar might appear if we limit width, but here we size to fit exactly)
+    // (viewport scrollbar might appear if we limit width, but here we size to
+    // fit exactly)
     int desiredWidth = visibleWidth + sideW;
 
     // Always use exactly the required width, up to a reasonable maximum
@@ -1690,7 +1698,8 @@ void MixerComponent::updateStripVisibility() {
     int newWidth = juce::jmin(desiredWidth, maxWidth);
 
     // Only center and resize if the width actually changed to avoid jitter,
-    // or just apply it. The getHeight() remains the same (e.g. 500 or 340 based on layout).
+    // or just apply it. The getHeight() remains the same (e.g. 500 or 340 based
+    // on layout).
     if (dw->getWidth() != newWidth) {
       dw->centreWithSize(newWidth, isExpandedLayout ? 500 : 340);
     }
@@ -1777,8 +1786,11 @@ void MixerComponent::HeaderComponent::resized() {
 }
 
 void MixerComponent::timerCallback() {
-  for (auto* strip : trackStrips) strip->updateMeter();
-  for (auto* strip : fxStrips) strip->updateMeter();
-  for (auto* strip : vstiStrips) strip->updateMeter();
+  for (auto *strip : trackStrips)
+    strip->updateMeter();
+  for (auto *strip : fxStrips)
+    strip->updateMeter();
+  for (auto *strip : vstiStrips)
+    strip->updateMeter();
   masterStrip.updateMeter();
 }

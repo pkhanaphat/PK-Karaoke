@@ -8,9 +8,7 @@
 #define TSF_IMPLEMENTATION
 #include "Audio/tsf.h"
 
-static void LOG_CRASH(const juce::String &msg) {
-  DBG(msg);
-}
+static void LOG_CRASH(const juce::String &msg) { DBG(msg); }
 
 SF2Source::SF2Source(MixerController *mixerController,
                      std::optional<InstrumentGroup> group)
@@ -24,6 +22,9 @@ SF2Source::SF2Source(MixerController *mixerController,
   for (int i = 0; i < 16; ++i) {
     channelPrograms[i] = 0;
     isDrumChannel[i] = (i == 9);
+    for (int n = 0; n < 128; ++n) {
+      noteOriginGroup[i][n] = -1;
+    }
   }
 }
 
@@ -74,11 +75,15 @@ bool SF2Source::loadSoundFont(const juce::File &sf2File, tsf *sharedSynth) {
       loadedPath = sf2File.getFullPathName();
       tsf_set_output(mainSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,
                      0.0f);
+      tsf_set_max_voices(mainSynth, 256);
       tsf_set_volume(mainSynth, currentVolume);
 
-      // Pre-allocate synths for all possible sound-producing groups to avoid tsf_copy on the audio thread
-      for (int i = 0; i <= 43; ++i) getOrCreateSynthForGroup(static_cast<InstrumentGroup>(i), mainSynth);
-      for (int i = 100; i <= 116; ++i) getOrCreateSynthForGroup(static_cast<InstrumentGroup>(i), mainSynth);
+      // Pre-allocate synths for all possible sound-producing groups to avoid
+      // tsf_copy on the audio thread
+      for (int i = 0; i <= 43; ++i)
+        getOrCreateSynthForGroup(static_cast<InstrumentGroup>(i), mainSynth);
+      for (int i = 100; i <= 116; ++i)
+        getOrCreateSynthForGroup(static_cast<InstrumentGroup>(i), mainSynth);
 
       DBG("SF2Source: Loaded " + sf2File.getFullPathName());
       LOG_CRASH("loadSoundFont: End Success");
@@ -160,10 +165,12 @@ void SF2Source::prepareToPlay(double sampleRate, int samplesPerBlock) {
   if (mainSynth != nullptr) {
     tsf_set_output(mainSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,
                    0.0f);
+    tsf_set_max_voices(mainSynth, 256);
     for (auto &pair : activeSynths) {
       if (pair.second != nullptr) {
         tsf_set_output(pair.second, TSF_STEREO_INTERLEAVED,
                        (int)currentSampleRate, 0.0f);
+        tsf_set_max_voices(pair.second, 256);
       }
     }
   }
@@ -195,14 +202,19 @@ void SF2Source::setSFVolume(float linearGain) {
 
 void SF2Source::processBlock(juce::AudioBuffer<float> &buffer,
                              juce::MidiBuffer &midiMessages) {
-  LOG_CRASH("processBlock: Start");
   juce::ScopedNoDenormals noDenormals;
-  const juce::ScopedLock sl(lock);
+
+  // Use TryLock instead of ScopedLock — if message thread is loading a new
+  // SoundFont we output silence for this block rather than blocking.
+  juce::ScopedTryLock stl(lock);
+  if (!stl.isLocked()) {
+    buffer.clear();
+    return;
+  }
 
   // Only process if mainSynth exists
   if (mainSynth == nullptr) {
     buffer.clear();
-    LOG_CRASH("processBlock: End (No Synth)");
     return;
   }
 
@@ -217,8 +229,11 @@ void SF2Source::processBlock(juce::AudioBuffer<float> &buffer,
     interleavedBuffer.malloc(maxSamplesPerBlock * 2);
   }
 
-  if (internalMixBuffer.getNumSamples() < numSamples) { internalMixBuffer.setSize(2, numSamples, false, true, true); }
-  juce::AudioBuffer<float> mixBuffer(internalMixBuffer.getArrayOfWritePointers(), 2, numSamples);
+  if (internalMixBuffer.getNumSamples() < numSamples) {
+    internalMixBuffer.setSize(2, numSamples, false, true, true);
+  }
+  juce::AudioBuffer<float> mixBuffer(
+      internalMixBuffer.getArrayOfWritePointers(), 2, numSamples);
   mixBuffer.clear();
 
   // Interleaved MIDI + audio render
@@ -242,31 +257,46 @@ void SF2Source::processBlock(juce::AudioBuffer<float> &buffer,
 void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
                                int numSamples) {
   float *interleaved = interleavedBuffer.get();
-  std::map<InstrumentGroup, std::pair<float, float>> groupPeaks;
+
+  // Reuse pre-allocated cache vectors to avoid heap allocation every callback
+  groupsToRenderCache.clear();
+  for (int idx = 0; idx < (int)groupPeaksCache.size(); ++idx)
+    groupPeaksCache[idx] = {0.0f, 0.0f};
 
   // Render from all actively playing dynamic synths + custom synths
-  std::vector<InstrumentGroup> groupsToRender;
   for (const auto &pair : activeSynths) {
-    if (pair.second != nullptr &&
-        std::find(groupsToRender.begin(), groupsToRender.end(), pair.first) ==
-            groupsToRender.end()) {
-      groupsToRender.push_back(pair.first);
+    if (pair.second != nullptr) {
+      int key = static_cast<int>(pair.first);
+      // Only add if not already present
+      bool found = false;
+      for (auto g : groupsToRenderCache)
+        if (g == pair.first) {
+          found = true;
+          break;
+        }
+      if (!found)
+        groupsToRenderCache.push_back(pair.first);
     }
   }
   for (const auto &pair : customSynths) {
-    if (pair.second != nullptr &&
-        std::find(groupsToRender.begin(), groupsToRender.end(), pair.first) ==
-            groupsToRender.end()) {
-      groupsToRender.push_back(pair.first);
+    if (pair.second != nullptr) {
+      bool found = false;
+      for (auto g : groupsToRenderCache)
+        if (g == pair.first) {
+          found = true;
+          break;
+        }
+      if (!found)
+        groupsToRenderCache.push_back(pair.first);
     }
   }
 
-  for (auto group : groupsToRender) {
+  for (auto group : groupsToRenderCache) {
     if (targetGroup.has_value() && targetGroup.value() != group)
       continue; // Skip rendering if it's not our target group
 
-    if (std::find(excludedGroups.begin(), excludedGroups.end(), group) !=
-        excludedGroups.end())
+    // O(1) lookup with unordered_set instead of O(n) std::find
+    if (excludedGroups.count(static_cast<int>(group)) > 0)
       continue; // Skip rendering if it's explicitly excluded
 
     tsf *synthToUse = nullptr;
@@ -369,13 +399,22 @@ void SF2Source::renderChannels(juce::AudioBuffer<float> &dest, int startSample,
       }
     }
 
-    groupPeaks[group].first = std::max(groupPeaks[group].first, peakL);
-    groupPeaks[group].second = std::max(groupPeaks[group].second, peakR);
+    int gpIdx = static_cast<int>(group);
+    if (gpIdx >= 0 && gpIdx < (int)groupPeaksCache.size()) {
+      groupPeaksCache[gpIdx].first =
+          std::max(groupPeaksCache[gpIdx].first, peakL);
+      groupPeaksCache[gpIdx].second =
+          std::max(groupPeaksCache[gpIdx].second, peakR);
+    }
   }
 
   if (mixer != nullptr) {
-    for (const auto &pair : groupPeaks) {
-      mixer->setTrackLevel(pair.first, pair.second.first, pair.second.second);
+    for (auto group : groupsToRenderCache) {
+      int gpIdx = static_cast<int>(group);
+      if (gpIdx >= 0 && gpIdx < (int)groupPeaksCache.size()) {
+        mixer->setTrackLevel(group, groupPeaksCache[gpIdx].first,
+                             groupPeaksCache[gpIdx].second);
+      }
     }
   }
 }
@@ -401,16 +440,19 @@ tsf *SF2Source::getOrCreateSynthForGroup(InstrumentGroup group,
   // we just return the mainSynth instead of cloning anything.
   // Initialization should happen during loadSoundFont().
   if (juce::MessageManager::getInstance()->isThisTheMessageThread()) {
-      tsf *newSynth = tsf_copy(sharedFontToCopyFrom);
-      if (newSynth != nullptr) {
-        tsf_set_output(newSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate, 0.0f);
-        tsf_set_volume(newSynth, currentVolume);
-        for (int ch = 0; ch < 16; ++ch) {
-          tsf_channel_set_presetnumber(newSynth, ch, channelPrograms[ch], (ch == 9) ? 1 : 0);
-        }
-        activeSynths[group] = newSynth;
-        return newSynth;
+    tsf *newSynth = tsf_copy(sharedFontToCopyFrom);
+    if (newSynth != nullptr) {
+      tsf_set_output(newSynth, TSF_STEREO_INTERLEAVED, (int)currentSampleRate,
+                     0.0f);
+      tsf_set_max_voices(newSynth, 256);
+      tsf_set_volume(newSynth, currentVolume);
+      for (int ch = 0; ch < 16; ++ch) {
+        tsf_channel_set_presetnumber(newSynth, ch, channelPrograms[ch],
+                                     (ch == 9) ? 1 : 0);
       }
+      activeSynths[group] = newSynth;
+      return newSynth;
+    }
   }
 
   return mainSynth;
@@ -439,8 +481,7 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
   // messages for other groups
   bool shouldPlayNotes =
       (!targetGroup.has_value() || targetGroup.value() == group) &&
-      (std::find(excludedGroups.begin(), excludedGroups.end(), group) ==
-       excludedGroups.end());
+      (excludedGroups.count(static_cast<int>(group)) == 0);
 
   int transpose = 0;
   if (mixer != nullptr && !isDrumChannel[channel]) {
@@ -453,35 +494,37 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
 
     // Only play if not fully muted and matches target group
     if (synth != nullptr && velocity > 0.001f && shouldPlayNotes) {
+      noteOriginGroup[channel][msg.getNoteNumber()] = static_cast<int>(group);
       tsf_channel_note_on(synth, channel,
                           juce::jlimit(0, 127, msg.getNoteNumber() + transpose),
                           juce::jlimit(0.0f, 1.0f, velocity));
     }
   } else if (msg.isNoteOff()) {
-    // Broadcast NoteOff to ALL synths to prevent hanging notes if a Program
-    // Change occurred while the note was held (which changes the 'group'
-    // routing).
-    for (auto &pair : activeSynths) {
-      if (pair.second != nullptr) {
-        if (!targetGroup.has_value() || targetGroup.value() == pair.first) {
-          int t = (mixer != nullptr && !isDrumChannel[channel])
-                      ? mixer->getTrackTranspose(pair.first)
-                      : 0;
-          tsf_channel_note_off(pair.second, channel,
-                               juce::jlimit(0, 127, msg.getNoteNumber() + t));
+    int originGroupInt = noteOriginGroup[channel][msg.getNoteNumber()];
+    if (originGroupInt != -1) {
+      InstrumentGroup originGroup =
+          static_cast<InstrumentGroup>(originGroupInt);
+
+      tsf *synth = nullptr;
+      if (!targetGroup.has_value() || targetGroup.value() == originGroup) {
+        auto customIt = customSynths.find(originGroup);
+        if (customIt != customSynths.end()) {
+          synth = customIt->second;
+        } else {
+          auto activeIt = activeSynths.find(originGroup);
+          if (activeIt != activeSynths.end())
+            synth = activeIt->second;
         }
       }
-    }
-    for (auto &pair : customSynths) {
-      if (pair.second != nullptr) {
-        if (!targetGroup.has_value() || targetGroup.value() == pair.first) {
-          int t = (mixer != nullptr && !isDrumChannel[channel])
-                      ? mixer->getTrackTranspose(pair.first)
-                      : 0;
-          tsf_channel_note_off(pair.second, channel,
-                               juce::jlimit(0, 127, msg.getNoteNumber() + t));
-        }
+
+      if (synth != nullptr) {
+        int t = (mixer != nullptr && !isDrumChannel[channel])
+                    ? mixer->getTrackTranspose(originGroup)
+                    : 0;
+        tsf_channel_note_off(synth, channel,
+                             juce::jlimit(0, 127, msg.getNoteNumber() + t));
       }
+      noteOriginGroup[channel][msg.getNoteNumber()] = -1; // clear
     }
   } else if (msg.isProgramChange()) {
     const int prog = msg.getProgramChangeNumber();
@@ -499,30 +542,31 @@ void SF2Source::processMidiMessage(const juce::MidiMessage &msg) {
                                      (channel == 9));
     }
   } else if (msg.isPitchWheel()) {
-    // Broadcast to all synths
-    for (auto &pair : activeSynths) {
-      if (pair.second != nullptr)
-        tsf_channel_set_pitchwheel(pair.second, channel,
-                                   msg.getPitchWheelValue());
+    tsf *synth = nullptr;
+    auto customIt = customSynths.find(group);
+    if (customIt != customSynths.end()) {
+      synth = customIt->second;
+    } else {
+      auto activeIt = activeSynths.find(group);
+      if (activeIt != activeSynths.end())
+        synth = activeIt->second;
     }
-    for (auto &pair : customSynths) {
-      if (pair.second != nullptr)
-        tsf_channel_set_pitchwheel(pair.second, channel,
-                                   msg.getPitchWheelValue());
+    if (synth != nullptr) {
+      tsf_channel_set_pitchwheel(synth, channel, msg.getPitchWheelValue());
     }
   } else if (msg.isController()) {
-    // Broadcast to all synths
-    for (auto &pair : activeSynths) {
-      if (pair.second != nullptr)
-        tsf_channel_midi_control(pair.second, channel,
-                                 msg.getControllerNumber(),
-                                 msg.getControllerValue());
+    tsf *synth = nullptr;
+    auto customIt = customSynths.find(group);
+    if (customIt != customSynths.end()) {
+      synth = customIt->second;
+    } else {
+      auto activeIt = activeSynths.find(group);
+      if (activeIt != activeSynths.end())
+        synth = activeIt->second;
     }
-    for (auto &pair : customSynths) {
-      if (pair.second != nullptr)
-        tsf_channel_midi_control(pair.second, channel,
-                                 msg.getControllerNumber(),
-                                 msg.getControllerValue());
+    if (synth != nullptr) {
+      tsf_channel_midi_control(synth, channel, msg.getControllerNumber(),
+                               msg.getControllerValue());
     }
   }
 }
